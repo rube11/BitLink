@@ -1,12 +1,13 @@
 // Receive one message at a time and send a receipt back to each sender.
 
+mod arguments;
 mod firewall;
-mod network;
 
-use std::env;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::process::ExitCode;
 
+use bit_to_byte_iroh::network;
+use iroh::Endpoint;
 use iroh::endpoint::Incoming;
 
 fn main() -> ExitCode {
@@ -31,92 +32,13 @@ fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
-    let mut arguments = env::args();
-    let _program_name = arguments.next();
-    let mut direct_address: Option<SocketAddr> = None;
-    let mut allowed_sender: Option<IpAddr> = None;
-    match arguments.next() {
-        Some(argument) => {
-            if argument == "--help" {
-                println!("Usage: iroh-receiver [--direct LISTEN_IP:PORT]");
-                println!("       iroh-receiver --direct LISTEN_IP:PORT --allow-from SENDER_IP");
-                println!(
-                    "--allow-from offers to add a narrow Ubuntu/UFW firewall rule after confirmation."
-                );
-                println!("Leave this running, then copy its sender command to another terminal.");
-                return Ok(());
-            }
-            if argument != "--direct" {
-                return Err(String::from(
-                    "Unknown receiver option. Use --help for instructions.",
-                ));
-            }
-            let address_text = match arguments.next() {
-                Some(text) => text,
-                None => {
-                    return Err(String::from(
-                        "After --direct, enter this computer's IP:PORT.",
-                    ));
-                }
-            };
-            let address: SocketAddr = match address_text.parse() {
-                Ok(address) => address,
-                Err(error) => return Err(format!("Invalid listening IP:PORT: {}", error)),
-            };
-            if address.ip().is_unspecified() || address.ip().is_multicast() || address.port() == 0 {
-                return Err(String::from(
-                    "Use a specific local IP and a port greater than zero. For a same-computer test, use 127.0.0.1:47002.",
-                ));
-            }
-            direct_address = Some(address);
-        }
-        None => {}
-    }
-    match arguments.next() {
-        Some(option) => {
-            if option != "--allow-from" {
-                return Err(String::from(
-                    "Expected --allow-from SENDER_IP. Use --help for instructions.",
-                ));
-            }
-            let sender_text = match arguments.next() {
-                Some(text) => text,
-                None => return Err(String::from("Missing sender IP after --allow-from.")),
-            };
-            let sender_ip: IpAddr = match sender_text.parse() {
-                Ok(ip) => ip,
-                Err(error) => return Err(format!("Invalid sender IP: {}", error)),
-            };
-            if sender_ip.is_unspecified() || sender_ip.is_multicast() {
-                return Err(String::from(
-                    "Use the sending computer's specific IP address.",
-                ));
-            }
-            match direct_address {
-                Some(address) => {
-                    if address.is_ipv4() != sender_ip.is_ipv4() {
-                        return Err(String::from(
-                            "The receiver and sender must use the same IP version.",
-                        ));
-                    }
-                }
-                None => {
-                    return Err(String::from(
-                        "--allow-from requires --direct LISTEN_IP:PORT.",
-                    ));
-                }
-            }
-            if arguments.next().is_some() {
-                return Err(String::from(
-                    "Too many receiver arguments. Use --help for instructions.",
-                ));
-            }
-            allowed_sender = Some(sender_ip);
-        }
-        None => {}
-    }
+    let options = match arguments::read() {
+        Ok(Some(options)) => options,
+        Ok(None) => return Ok(()),
+        Err(error) => return Err(error),
+    };
 
-    let endpoint_result = match direct_address {
+    let endpoint_result = match options.direct_address {
         Some(address) => network::open_direct_endpoint(address).await,
         None => network::open_endpoint(false).await,
     };
@@ -127,7 +49,7 @@ async fn run() -> Result<(), String> {
 
     // Ask only after binding succeeds, so a bad listening address cannot leave
     // behind a new firewall rule. Declining the prompt changes no permissions.
-    match (allowed_sender, direct_address) {
+    match (options.allowed_sender, options.direct_address) {
         (Some(sender_ip), Some(listen_address)) => {
             match firewall::request_access(sender_ip, listen_address) {
                 Ok(()) => {}
@@ -140,6 +62,37 @@ async fn run() -> Result<(), String> {
         _ => {}
     }
 
+    match print_sender_command(&endpoint, options.direct_address) {
+        Ok(()) => {}
+        Err(error) => {
+            endpoint.close().await;
+            return Err(error);
+        }
+    }
+
+    loop {
+        let incoming = match endpoint.accept().await {
+            Some(incoming) => incoming,
+            None => {
+                endpoint.close().await;
+                return Err(String::from("The receiver endpoint closed."));
+            }
+        };
+
+        // One sender at a time keeps this experiment easy to follow. A stalled
+        // sender gets at most 30 seconds before we return to accepting connections.
+        match tokio::time::timeout(network::NETWORK_TIMEOUT, receive_message(incoming)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => eprintln!("{}", error),
+            Err(_) => eprintln!("The sender took too long. Waiting for another sender."),
+        }
+    }
+}
+
+fn print_sender_command(
+    endpoint: &Endpoint,
+    direct_address: Option<SocketAddr>,
+) -> Result<(), String> {
     let address = endpoint.addr();
     println!();
     println!("Receiver ready. Leave this terminal open. Press Ctrl+C to stop.");
@@ -164,7 +117,6 @@ async fn run() -> Result<(), String> {
             let relay_url = match address.relay_urls().next() {
                 Some(url) => url,
                 None => {
-                    endpoint.close().await;
                     return Err(String::from(
                         "The relay address disappeared. Please restart the receiver.",
                     ));
@@ -178,23 +130,7 @@ async fn run() -> Result<(), String> {
     }
     println!();
 
-    loop {
-        let incoming = match endpoint.accept().await {
-            Some(incoming) => incoming,
-            None => {
-                endpoint.close().await;
-                return Err(String::from("The receiver endpoint closed."));
-            }
-        };
-
-        // One sender at a time keeps this experiment easy to follow. A stalled
-        // sender gets at most 30 seconds before we return to accepting connections.
-        match tokio::time::timeout(network::NETWORK_TIMEOUT, receive_message(incoming)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => eprintln!("{}", error),
-            Err(_) => eprintln!("The sender took too long. Waiting for another sender."),
-        }
-    }
+    return Ok(());
 }
 
 async fn receive_message(incoming: Incoming) -> Result<(), String> {

@@ -8,11 +8,11 @@ description = "A separate peer-to-peer connection experiment for Bit to Byte"
 
 [[bin]]
 name = "iroh-receiver"
-path = "receiver.rs"
+path = "src/receiver/main.rs"
 
 [[bin]]
 name = "iroh-sender"
-path = "sender.rs"
+path = "src/sender/main.rs"
 
 [dependencies]
 # Keep router port mapping disabled. This experiment uses hole punching and relays.
