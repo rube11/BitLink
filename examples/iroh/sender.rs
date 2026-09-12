@@ -3,6 +3,7 @@
 mod network;
 
 use std::env;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::ExitCode;
 
 use iroh::endpoint::VarInt;
@@ -44,15 +45,23 @@ async fn run() -> Result<(), String> {
 
     if receiver_id_text == "--help" {
         println!("Usage: iroh-sender [--relay-only] RECEIVER_ID RELAY_URL \"MESSAGE\"");
+        println!("       iroh-sender --direct RECEIVER_ID RECEIVER_IP:PORT \"MESSAGE\"");
         return Ok(());
     }
 
     let mut relay_only = false;
+    let mut direct_only = false;
     if receiver_id_text == "--relay-only" {
         relay_only = true;
         receiver_id_text = match arguments.next() {
             Some(text) => text,
             None => return Err(String::from("Missing receiver ID after --relay-only.")),
+        };
+    } else if receiver_id_text == "--direct" {
+        direct_only = true;
+        receiver_id_text = match arguments.next() {
+            Some(text) => text,
+            None => return Err(String::from("Missing receiver ID after --direct.")),
         };
     }
 
@@ -61,18 +70,37 @@ async fn run() -> Result<(), String> {
         Err(error) => return Err(format!("Invalid receiver ID: {}", error)),
     };
 
-    let relay_url_text = match arguments.next() {
+    let address_text = match arguments.next() {
         Some(text) => text,
         None => {
             return Err(String::from(
-                "Missing relay URL. Copy it from the receiver.",
+                "Missing receiver address. Copy the command printed by the receiver.",
             ));
         }
     };
-    let relay_url: RelayUrl = match relay_url_text.parse() {
-        Ok(url) => url,
-        Err(error) => return Err(format!("Invalid relay URL: {}", error)),
-    };
+    let mut receiver_address = EndpointAddr::new(receiver_id);
+    let mut local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+    if direct_only {
+        let address: SocketAddr = match address_text.parse() {
+            Ok(address) => address,
+            Err(error) => return Err(format!("Invalid receiver IP:PORT: {}", error)),
+        };
+        if address.ip().is_unspecified() || address.ip().is_multicast() || address.port() == 0 {
+            return Err(String::from(
+                "Use the receiver's specific IP and a port greater than zero.",
+            ));
+        }
+        if address.is_ipv6() {
+            local_address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
+        }
+        receiver_address = receiver_address.with_ip_addr(address);
+    } else {
+        let relay_url: RelayUrl = match address_text.parse() {
+            Ok(url) => url,
+            Err(error) => return Err(format!("Invalid relay URL: {}", error)),
+        };
+        receiver_address = receiver_address.with_relay_url(relay_url);
+    }
 
     let message = match arguments.next() {
         Some(message) => message,
@@ -90,13 +118,15 @@ async fn run() -> Result<(), String> {
         ));
     }
 
-    let endpoint = match network::open_endpoint(relay_only).await {
+    let endpoint_result = match direct_only {
+        true => network::open_direct_endpoint(local_address).await,
+        false => network::open_endpoint(relay_only).await,
+    };
+    let endpoint = match endpoint_result {
         Ok(endpoint) => endpoint,
         Err(error) => return Err(error),
     };
 
-    let mut receiver_address = EndpointAddr::new(receiver_id);
-    receiver_address = receiver_address.with_relay_url(relay_url);
     println!("Connecting to receiver {}...", receiver_id);
 
     // Bound the whole exchange, including connection setup and the receipt.
@@ -112,6 +142,11 @@ async fn run() -> Result<(), String> {
     match result {
         Ok(result) => return result,
         Err(_) => {
+            if direct_only {
+                return Err(String::from(
+                    "No receipt within 30 seconds. Check the receiver's IP, port, firewall, and network access. No relay was used. Delivery is unconfirmed.",
+                ));
+            }
             return Err(String::from(
                 "No receipt within 30 seconds. Keep the receiver running and check its ID and relay URL. Delivery is unconfirmed.",
             ));

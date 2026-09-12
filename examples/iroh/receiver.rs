@@ -3,6 +3,7 @@
 mod network;
 
 use std::env;
+use std::net::SocketAddr;
 use std::process::ExitCode;
 
 use iroh::endpoint::Incoming;
@@ -31,44 +32,91 @@ fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let mut arguments = env::args();
     let _program_name = arguments.next();
+    let mut direct_address: Option<SocketAddr> = None;
     match arguments.next() {
         Some(argument) => {
             if argument == "--help" {
-                println!("Usage: iroh-receiver");
+                println!("Usage: iroh-receiver [--direct LISTEN_IP:PORT]");
                 println!("Leave this running, then copy its sender command to another terminal.");
                 return Ok(());
             }
-            return Err(String::from(
-                "The receiver takes no arguments. Use --help for instructions.",
-            ));
+            if argument != "--direct" {
+                return Err(String::from(
+                    "Unknown receiver option. Use --help for instructions.",
+                ));
+            }
+            let address_text = match arguments.next() {
+                Some(text) => text,
+                None => {
+                    return Err(String::from(
+                        "After --direct, enter this computer's IP:PORT.",
+                    ));
+                }
+            };
+            let address: SocketAddr = match address_text.parse() {
+                Ok(address) => address,
+                Err(error) => return Err(format!("Invalid listening IP:PORT: {}", error)),
+            };
+            if address.ip().is_unspecified() || address.ip().is_multicast() || address.port() == 0 {
+                return Err(String::from(
+                    "Use a specific local IP and a port greater than zero. For a same-computer test, use 127.0.0.1:47002.",
+                ));
+            }
+            direct_address = Some(address);
         }
         None => {}
     }
+    if arguments.next().is_some() {
+        return Err(String::from(
+            "Too many receiver arguments. Use --help for instructions.",
+        ));
+    }
 
-    let endpoint = match network::open_endpoint(false).await {
+    let endpoint_result = match direct_address {
+        Some(address) => network::open_direct_endpoint(address).await,
+        None => network::open_endpoint(false).await,
+    };
+    let endpoint = match endpoint_result {
         Ok(endpoint) => endpoint,
         Err(error) => return Err(error),
     };
 
     let address = endpoint.addr();
-    let relay_url = match address.relay_urls().next() {
-        Some(url) => url,
-        None => {
-            endpoint.close().await;
-            return Err(String::from(
-                "The relay address disappeared. Please restart the receiver.",
-            ));
-        }
-    };
-
     println!();
     println!("Receiver ready. Leave this terminal open. Press Ctrl+C to stop.");
     println!("Run this from the project folder on the other computer:");
     println!();
-    println!(
-        "cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-sender -- {} {} \"Hello from Bit to Byte!\"",
-        address.id, relay_url
-    );
+    match direct_address {
+        Some(listen_address) => {
+            println!(
+                "cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-sender -- --direct {} {} \"Hello from Bit to Byte!\"",
+                address.id, listen_address
+            );
+            println!();
+            println!(
+                "The receiver firewall must allow UDP to {} from the sending computer.",
+                listen_address
+            );
+            println!(
+                "This test accepts messages from any peer that can reach it and knows its ID."
+            );
+        }
+        None => {
+            let relay_url = match address.relay_urls().next() {
+                Some(url) => url,
+                None => {
+                    endpoint.close().await;
+                    return Err(String::from(
+                        "The relay address disappeared. Please restart the receiver.",
+                    ));
+                }
+            };
+            println!(
+                "cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-sender -- {} {} \"Hello from Bit to Byte!\"",
+                address.id, relay_url
+            );
+        }
+    }
     println!();
 
     loop {

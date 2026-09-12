@@ -1,5 +1,6 @@
 // The connection setup and protocol values shared by the two programs.
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, presets};
@@ -10,6 +11,30 @@ pub const PROTOCOL: &[u8] = b"bit-to-byte/connection-test/1";
 pub const MAX_MESSAGE_BYTES: usize = 4096;
 pub const RECEIPT: &[u8] = b"received";
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub async fn open_direct_endpoint(listen_address: SocketAddr) -> Result<Endpoint, String> {
+    // Minimal does not enable peer lookup services. Disable relays as well,
+    // then open only the local socket requested by this program.
+    let mut builder = Endpoint::builder(presets::Minimal);
+    builder = builder.relay_mode(RelayMode::Disabled);
+    builder = builder.clear_ip_transports();
+    builder = builder.alpns(vec![PROTOCOL.to_vec()]);
+    builder = match builder.bind_addr(listen_address) {
+        Ok(builder) => builder,
+        Err(error) => return Err(format!("Invalid listening address: {}", error)),
+    };
+
+    let endpoint = match builder.bind().await {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            return Err(format!("Could not listen on {}: {}", listen_address, error));
+        }
+    };
+
+    println!("Direct-only mode: relays and peer lookup services are disabled.");
+    // online() waits for a relay, so it must not be used in this mode.
+    return Ok(endpoint);
+}
 
 pub async fn open_endpoint(relay_only: bool) -> Result<Endpoint, String> {
     // The sender command includes the receiver's relay, so DNS peer lookup is unnecessary.
