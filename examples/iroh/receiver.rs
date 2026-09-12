@@ -1,9 +1,10 @@
 // Receive one message at a time and send a receipt back to each sender.
 
+mod firewall;
 mod network;
 
 use std::env;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::process::ExitCode;
 
 use iroh::endpoint::Incoming;
@@ -33,10 +34,15 @@ async fn run() -> Result<(), String> {
     let mut arguments = env::args();
     let _program_name = arguments.next();
     let mut direct_address: Option<SocketAddr> = None;
+    let mut allowed_sender: Option<IpAddr> = None;
     match arguments.next() {
         Some(argument) => {
             if argument == "--help" {
                 println!("Usage: iroh-receiver [--direct LISTEN_IP:PORT]");
+                println!("       iroh-receiver --direct LISTEN_IP:PORT --allow-from SENDER_IP");
+                println!(
+                    "--allow-from offers to add a narrow Ubuntu/UFW firewall rule after confirmation."
+                );
                 println!("Leave this running, then copy its sender command to another terminal.");
                 return Ok(());
             }
@@ -66,10 +72,48 @@ async fn run() -> Result<(), String> {
         }
         None => {}
     }
-    if arguments.next().is_some() {
-        return Err(String::from(
-            "Too many receiver arguments. Use --help for instructions.",
-        ));
+    match arguments.next() {
+        Some(option) => {
+            if option != "--allow-from" {
+                return Err(String::from(
+                    "Expected --allow-from SENDER_IP. Use --help for instructions.",
+                ));
+            }
+            let sender_text = match arguments.next() {
+                Some(text) => text,
+                None => return Err(String::from("Missing sender IP after --allow-from.")),
+            };
+            let sender_ip: IpAddr = match sender_text.parse() {
+                Ok(ip) => ip,
+                Err(error) => return Err(format!("Invalid sender IP: {}", error)),
+            };
+            if sender_ip.is_unspecified() || sender_ip.is_multicast() {
+                return Err(String::from(
+                    "Use the sending computer's specific IP address.",
+                ));
+            }
+            match direct_address {
+                Some(address) => {
+                    if address.is_ipv4() != sender_ip.is_ipv4() {
+                        return Err(String::from(
+                            "The receiver and sender must use the same IP version.",
+                        ));
+                    }
+                }
+                None => {
+                    return Err(String::from(
+                        "--allow-from requires --direct LISTEN_IP:PORT.",
+                    ));
+                }
+            }
+            if arguments.next().is_some() {
+                return Err(String::from(
+                    "Too many receiver arguments. Use --help for instructions.",
+                ));
+            }
+            allowed_sender = Some(sender_ip);
+        }
+        None => {}
     }
 
     let endpoint_result = match direct_address {
@@ -80,6 +124,21 @@ async fn run() -> Result<(), String> {
         Ok(endpoint) => endpoint,
         Err(error) => return Err(error),
     };
+
+    // Ask only after binding succeeds, so a bad listening address cannot leave
+    // behind a new firewall rule. Declining the prompt changes no permissions.
+    match (allowed_sender, direct_address) {
+        (Some(sender_ip), Some(listen_address)) => {
+            match firewall::request_access(sender_ip, listen_address) {
+                Ok(()) => {}
+                Err(error) => {
+                    endpoint.close().await;
+                    return Err(error);
+                }
+            }
+        }
+        _ => {}
+    }
 
     let address = endpoint.addr();
     println!();
