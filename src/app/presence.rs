@@ -53,8 +53,17 @@ pub fn receive_packet(app: &mut App, bytes: &[u8], own_id: &str, now: Instant) {
     }
 
     for person in &mut app.people {
-
-        // update online status.    update when last heard
+        // update online status.
+        if person.id == person_id {
+            if message_type == "hello" {
+                person.online = true;
+            } else {
+                person.online = false;
+            }
+            person.last_seen = now;
+            return;
+        }
+        // update when last heard
         // stop processring thios packet
     }
 
