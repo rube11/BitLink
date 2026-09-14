@@ -5,12 +5,31 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, presets};
 use iroh::{Endpoint, RelayMode};
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 
 // Both programs must agree on the protocol before iroh accepts a connection.
 pub const PROTOCOL: &[u8] = b"bit-to-byte/connection-test/1";
 pub const MAX_MESSAGE_BYTES: usize = 4096;
 pub const RECEIPT: &[u8] = b"received";
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub async fn open_lan_endpoint() -> Result<Endpoint, String> {
+    let lookup = MdnsAddressLookup::builder().service_name("bit-to-byte-v1");
+    let mut builder = Endpoint::builder(presets::Minimal);
+    builder = builder.relay_mode(RelayMode::Disabled);
+    builder = builder.address_lookup(lookup);
+    builder = builder.alpns(vec![PROTOCOL.to_vec()]);
+
+    match builder.bind().await {
+        Ok(endpoint) => {
+            println!(
+                "LAN mode: mDNS address discovery enabled; relays and public lookup services disabled."
+            );
+            return Ok(endpoint);
+        }
+        Err(error) => return Err(format!("Could not open the LAN endpoint: {}", error)),
+    }
+}
 
 pub async fn open_direct_endpoint(listen_address: SocketAddr) -> Result<Endpoint, String> {
     // Minimal does not enable peer lookup services. Disable relays as well,

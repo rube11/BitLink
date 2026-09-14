@@ -38,9 +38,13 @@ async fn run() -> Result<(), String> {
         Err(error) => return Err(error),
     };
 
-    let endpoint_result = match options.direct_address {
-        Some(address) => network::open_direct_endpoint(address).await,
-        None => network::open_endpoint(false).await,
+    let endpoint_result = if options.lan {
+        network::open_lan_endpoint().await
+    } else {
+        match options.direct_address {
+            Some(address) => network::open_direct_endpoint(address).await,
+            None => network::open_endpoint(false).await,
+        }
     };
     let endpoint = match endpoint_result {
         Ok(endpoint) => endpoint,
@@ -62,7 +66,7 @@ async fn run() -> Result<(), String> {
         _ => {}
     }
 
-    match print_sender_command(&endpoint, options.direct_address) {
+    match print_sender_command(&endpoint, options.direct_address, options.lan) {
         Ok(()) => {}
         Err(error) => {
             endpoint.close().await;
@@ -92,12 +96,27 @@ async fn run() -> Result<(), String> {
 fn print_sender_command(
     endpoint: &Endpoint,
     direct_address: Option<SocketAddr>,
+    lan: bool,
 ) -> Result<(), String> {
     let address = endpoint.addr();
     println!();
     println!("Receiver ready. Leave this terminal open. Press Ctrl+C to stop.");
     println!("Run this from the project folder on the other computer:");
     println!();
+    if lan {
+        println!(
+            "cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-sender -- --lan {} \"Hello from Bit to Byte!\"",
+            address.id
+        );
+        println!();
+        println!("The sender discovers this receiver's IP automatically on the local network.");
+        println!("Both computers must allow multicast discovery and direct UDP traffic.");
+        println!(
+            "This receiver advertises its ID locally and accepts messages from any reachable peer."
+        );
+        println!();
+        return Ok(());
+    }
     match direct_address {
         Some(listen_address) => {
             println!(

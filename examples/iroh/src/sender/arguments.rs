@@ -10,6 +10,7 @@ pub struct Options {
     pub receiver_address: EndpointAddr,
     pub local_address: SocketAddr,
     pub direct_only: bool,
+    pub lan: bool,
     pub relay_only: bool,
     pub message: String,
 }
@@ -30,16 +31,24 @@ pub fn read() -> Result<Option<Options>, String> {
     if receiver_id_text == "--help" {
         println!("Usage: iroh-sender [--relay-only] RECEIVER_ID RELAY_URL \"MESSAGE\"");
         println!("       iroh-sender --direct RECEIVER_ID RECEIVER_IP:PORT \"MESSAGE\"");
+        println!("       iroh-sender --lan RECEIVER_ID \"MESSAGE\"");
         return Ok(None);
     }
 
     let mut relay_only = false;
     let mut direct_only = false;
+    let mut lan = false;
     if receiver_id_text == "--relay-only" {
         relay_only = true;
         receiver_id_text = match arguments.next() {
             Some(text) => text,
             None => return Err(String::from("Missing receiver ID after --relay-only.")),
+        };
+    } else if receiver_id_text == "--lan" {
+        lan = true;
+        receiver_id_text = match arguments.next() {
+            Some(text) => text,
+            None => return Err(String::from("Missing receiver ID after --lan.")),
         };
     } else if receiver_id_text == "--direct" {
         direct_only = true;
@@ -54,36 +63,38 @@ pub fn read() -> Result<Option<Options>, String> {
         Err(error) => return Err(format!("Invalid receiver ID: {}", error)),
     };
 
-    let address_text = match arguments.next() {
-        Some(text) => text,
-        None => {
-            return Err(String::from(
-                "Missing receiver address. Copy the command printed by the receiver.",
-            ));
-        }
-    };
     let mut receiver_address = EndpointAddr::new(receiver_id);
     let mut local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
-    if direct_only {
-        let address: SocketAddr = match address_text.parse() {
-            Ok(address) => address,
-            Err(error) => return Err(format!("Invalid receiver IP:PORT: {}", error)),
+    if !lan {
+        let address_text = match arguments.next() {
+            Some(text) => text,
+            None => {
+                return Err(String::from(
+                    "Missing receiver address. Copy the command printed by the receiver.",
+                ));
+            }
         };
-        if address.ip().is_unspecified() || address.ip().is_multicast() || address.port() == 0 {
-            return Err(String::from(
-                "Use the receiver's specific IP and a port greater than zero.",
-            ));
+        if direct_only {
+            let address: SocketAddr = match address_text.parse() {
+                Ok(address) => address,
+                Err(error) => return Err(format!("Invalid receiver IP:PORT: {}", error)),
+            };
+            if address.ip().is_unspecified() || address.ip().is_multicast() || address.port() == 0 {
+                return Err(String::from(
+                    "Use the receiver's specific IP and a port greater than zero.",
+                ));
+            }
+            if address.is_ipv6() {
+                local_address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
+            }
+            receiver_address = receiver_address.with_ip_addr(address);
+        } else {
+            let relay_url: RelayUrl = match address_text.parse() {
+                Ok(url) => url,
+                Err(error) => return Err(format!("Invalid relay URL: {}", error)),
+            };
+            receiver_address = receiver_address.with_relay_url(relay_url);
         }
-        if address.is_ipv6() {
-            local_address = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
-        }
-        receiver_address = receiver_address.with_ip_addr(address);
-    } else {
-        let relay_url: RelayUrl = match address_text.parse() {
-            Ok(url) => url,
-            Err(error) => return Err(format!("Invalid relay URL: {}", error)),
-        };
-        receiver_address = receiver_address.with_relay_url(relay_url);
     }
 
     let message = match arguments.next() {
@@ -106,6 +117,7 @@ pub fn read() -> Result<Option<Options>, String> {
         receiver_address: receiver_address,
         local_address: local_address,
         direct_only: direct_only,
+        lan: lan,
         relay_only: relay_only,
         message: message,
     }));

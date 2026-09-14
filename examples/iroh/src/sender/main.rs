@@ -37,9 +37,12 @@ async fn run() -> Result<(), String> {
         Err(error) => return Err(error),
     };
 
-    let endpoint_result = match options.direct_only {
-        true => network::open_direct_endpoint(options.local_address).await,
-        false => network::open_endpoint(options.relay_only).await,
+    let endpoint_result = if options.lan {
+        network::open_lan_endpoint().await
+    } else if options.direct_only {
+        network::open_direct_endpoint(options.local_address).await
+    } else {
+        network::open_endpoint(options.relay_only).await
     };
     let endpoint = match endpoint_result {
         Ok(endpoint) => endpoint,
@@ -59,8 +62,19 @@ async fn run() -> Result<(), String> {
     endpoint.close().await;
 
     match result {
+        Ok(Err(error)) if options.lan => {
+            return Err(format!(
+                "{}. LAN mode requires local multicast discovery and direct UDP access. Check the receiver ID, firewalls, and Wi-Fi client isolation. No relay was used. Delivery is unconfirmed.",
+                error
+            ));
+        }
         Ok(result) => return result,
         Err(_) => {
+            if options.lan {
+                return Err(String::from(
+                    "No receipt within 30 seconds. Keep the LAN receiver running on the same network and check its ID, multicast, firewalls, and Wi-Fi client isolation. No relay was used. Delivery is unconfirmed.",
+                ));
+            }
             if options.direct_only {
                 return Err(String::from(
                     "No receipt within 30 seconds. Check the receiver's IP, port, firewall, and network access. No relay was used. Delivery is unconfirmed.",

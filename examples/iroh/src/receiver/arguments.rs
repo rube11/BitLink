@@ -4,6 +4,7 @@ use std::env;
 use std::net::{IpAddr, SocketAddr};
 
 pub struct Options {
+    pub lan: bool,
     pub direct_address: Option<SocketAddr>,
     pub allowed_sender: Option<IpAddr>,
 }
@@ -18,12 +19,25 @@ pub fn read() -> Result<Option<Options>, String> {
         Some(argument) => {
             if argument == "--help" {
                 println!("Usage: iroh-receiver [--direct LISTEN_IP:PORT]");
+                println!("       iroh-receiver --lan");
                 println!("       iroh-receiver --direct LISTEN_IP:PORT --allow-from SENDER_IP");
                 println!(
                     "--allow-from offers to add a narrow Ubuntu/UFW firewall rule after confirmation."
                 );
                 println!("Leave this running, then copy its sender command to another terminal.");
                 return Ok(None);
+            }
+            if argument == "--lan" {
+                if arguments.next().is_some() {
+                    return Err(String::from(
+                        "--lan cannot be combined with other receiver options.",
+                    ));
+                }
+                return Ok(Some(Options {
+                    lan: true,
+                    direct_address: None,
+                    allowed_sender: None,
+                }));
             }
             if argument != "--direct" {
                 return Err(String::from(
@@ -96,6 +110,7 @@ pub fn read() -> Result<Option<Options>, String> {
     }
 
     return Ok(Some(Options {
+        lan: false,
         direct_address: direct_address,
         allowed_sender: allowed_sender,
     }));
