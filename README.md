@@ -64,6 +64,43 @@ Discovery sends names without authentication or encryption. An online
 label means a recent hello was received, not that TCP chat is connected.
 TCP is still demonstrated separately in the examples below.
 
+## If two computers cannot discover each other
+
+A successful two-window test only proves local discovery. The app sends a
+separate loopback copy, so that test can pass while a firewall blocks the LAN
+packets.
+
+On Ubuntu, check the firewall and recent discovery drops:
+
+```bash
+sudo ufw status verbose
+sudo journalctl -k --since '5 minutes ago' --grep 'UFW.*DPT=47001'
+```
+
+If UFW blocks the packets, allow only the discovery group and UDP port from
+your local subnet. For example, this rule is for a `192.168.0.0/24` home network;
+replace that subnet if yours is different:
+
+```bash
+sudo ufw allow in proto udp from 192.168.0.0/24 to 239.255.42.99 port 47001 comment 'Bit to Byte discovery'
+```
+
+The rest of the firewall stays enabled. See the
+[UFW rule documentation](https://manpages.ubuntu.com/manpages/noble/man8/ufw.8.html).
+
+WSL 2 normally uses a virtual NAT network. Do not assume an app running inside
+WSL is directly on the home LAN. Check the WSL version in Windows PowerShell:
+
+```powershell
+wsl --list --verbose
+```
+
+On Windows 11 22H2 or newer, WSL's mirrored networking mode supports multicast
+and direct LAN access. Windows and Hyper-V firewall rules still apply. Follow
+[Microsoft's WSL networking guide](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking)
+when configuring it. A native Windows build is another option for testing
+without WSL's virtual network.
+
 ## TCP examples for the meeting
 
 There are also two standalone programs that exchange real messages. Start the
@@ -83,6 +120,33 @@ cargo run --locked --example sender -- 192.168.1.24:7000
 Replace that example IP with the receiving laptop's LAN address. Read the
 [TCP meeting guide](examples/tcp/README.md) for setup, a code walkthrough, and
 steps toward an online list. These examples are separate from the TUI.
+
+## Iroh connection experiment
+
+For automatic LAN address discovery with relays disabled, start:
+
+```bash
+cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-receiver -- --lan
+```
+
+Copy its printed sender command to the other computer. No manual IP address
+or internet connection is needed after building, but the network must allow
+multicast discovery and direct UDP traffic. Wi-Fi client isolation can block
+both; manual IP entry does not bypass it.
+
+To test peer-to-peer connections between Ubuntu and WSL using iroh's NAT
+traversal and relay support, start the separate receiver:
+
+```bash
+cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-receiver
+```
+
+It prints the sender command to run on the other computer. Read the
+[iroh experiment guide](examples/iroh/README.md) for the two-computer test and a
+relay-only test. This experiment needs Rust 1.91 or newer; the relay-assisted
+mode also needs internet access.
+Its dependencies and lockfile live in `examples/iroh/`; the TUI still uses its
+existing discovery code.
 
 ## Controls
 
