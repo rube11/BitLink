@@ -1,5 +1,5 @@
 // Application startup and the event loop.
-pub mod discovery;
+pub mod network;
 pub mod presence;
 pub mod state;
 
@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use crossterm::event;
 
-use crate::app::discovery::Discovery;
+use crate::app::network::Network;
 use crate::app::state::App;
 use crate::tui::{input, render, terminal};
 
 pub fn run() -> io::Result<()> {
     let mut app = App::new();
+    let mut chosen_name = None;
     let mut arguments = std::env::args();
     arguments.next();
     loop {
@@ -27,8 +28,8 @@ pub fn run() -> io::Result<()> {
                 return Ok(());
             }
             "--name" => {
-                app.name = match arguments.next() {
-                    Some(name) => name.trim().to_string(),
+                chosen_name = match arguments.next() {
+                    Some(name) => Some(name.trim().to_string()),
                     None => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
@@ -45,17 +46,18 @@ pub fn run() -> io::Result<()> {
             }
         }
     }
-    let mut discovery = match Discovery::start(&app.name) {
-        Ok(discovery) => discovery,
+    let mut network = match Network::connect(chosen_name) {
+        Ok(network) => network,
         Err(error) => return Err(error),
     };
+    app.name = String::from(network.name());
     let mut terminal = match terminal::start() {
         Ok(terminal) => terminal,
         Err(error) => return Err(error),
     };
-    let run_result = run_event_loop(&mut terminal, &mut app, &mut discovery);
-    // If a goodbye is lost, the other apps still have the eight-second timeout.
-    let _goodbye_result = discovery.goodbye();
+    let run_result = run_event_loop(&mut terminal, &mut app, &mut network);
+    // A lost goodbye is handled by registration freshness and client timeouts.
+    network.goodbye();
     // Restore the terminal even when drawing or reading a key fails.
     let restore_result = terminal::restore();
 
@@ -78,13 +80,10 @@ pub fn run() -> io::Result<()> {
 fn run_event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
-    discovery: &mut Discovery,
+    network: &mut Network,
 ) -> io::Result<()> {
     while app.running {
-        match discovery.update(app) {
-            Ok(()) => {}
-            Err(error) => return Err(error),
-        }
+        network.update(app);
         // Ratatui needs a callback so it can provide the frame to draw on.
         let draw_result = terminal.draw(|frame| {
             render::draw(frame, app);

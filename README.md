@@ -1,152 +1,60 @@
 # Bit to Byte
 
-A small Rust TUI with automatic LAN discovery and online/offline status.
+A Rust terminal messenger using the club's public Lightsail relay.
 
 ## Run
 
-```bash
-cargo run --locked -- --name Alice
-```
-
-Use a terminal at least **64 columns by 16 rows** and a current stable Rust
-toolchain. `--name` sets your display name; it defaults to `Club member`.
-Use `--help` to see the available option.
-
-People are discovered automatically. **Chat messages still stay on this
-computer** and are not saved. Announcements and Files are placeholders.
-
-## Try online status on one computer
-
-Leave Alice running, then open a second terminal in the project folder:
+On each computer, from this branch:
 
 ```bash
-cargo run --locked -- --name Bob
+cargo run
 ```
 
-Press Tab in both windows to open Messages. Within a few seconds, Alice should
-see Bob as `[online]`, and Bob should see Alice as `[online]`. Each app hides
-itself from its own list. No IP address or `--connect` option is needed.
+Internet access and a current stable Rust toolchain are required. Use a terminal
+at least **64 columns by 16 rows**. Each launch automatically connects to
+`32.189.170.75:47002`, registers a fresh ID, and chooses a name such as
+`Member a1b2c3`. No server command, IP entry, peer ID, or home-router forwarding
+is required. Optionally choose a display name with `cargo run -- --name Alice`.
 
-Quit Bob with `q` while browsing or Ctrl+C at any time. Alice should now show
-Bob as `[offline]`. The conversation and draft remain in Alice's list.
-If Bob is killed without a goodbye, Alice marks him offline eight seconds
-after his last hello packet. Try a third window to see that people leave
-independently.
+Press **Tab** to open Messages. Other users running this branch should appear
+within a few seconds, including users on different internet connections. Select
+a person with Up/Down, press Enter to type, then Enter to send.
 
-Each launch has a new ID. Restarting Bob creates a new entry; the old entry
-stays offline. Two people can use the same display name without sharing status.
-Persistent identities and merging conversations can be added later.
+The footer shows relay connectivity. Outgoing messages show **sending**,
+**delivered** (the receiving app returned a receipt), or **unconfirmed** (no
+receipt within ten seconds). An unconfirmed message might still have arrived.
+Messages retry during that window and duplicate receipts/messages are handled
+in the clients. This is a bounded demo, not guaranteed or ordered delivery.
 
-## How discovery works
+## Presence and limits
 
-Every app joins the same IPv4 UDP multicast group, `239.255.42.99:47001`, using
-the operating system's default multicast interface. It also sends a copy over
-loopback so windows on the same computer can discover each other when Wi-Fi
-multicast is filtered. Duplicate hellos refresh the same person. There is no
-main machine.
+Each client uses one IPv4 UDP socket, refreshing its named registration every
+two seconds. The server returns recent named registrations as the People list.
+Quit sends a goodbye; crashes or lost connectivity become offline after roughly
+14 seconds. If the relay stops responding, the footer says it is unavailable and
+the app retries without closing. Existing conversations and drafts remain.
 
-1. Every two seconds, send a `hello` with this app's ID and display name.
-2. Receiving a hello adds that person or refreshes their online status.
-3. Quitting sends a `goodbye`, which marks that person offline.
-4. Eight seconds without a hello also marks that person offline.
+All users of this shared relay can see the names of active app users. This demo
+has **no encryption or authenticated identity**. Messages go through the relay. Networks
+that block outbound UDP can prevent connection. History is in memory only, IDs
+change on restart, and there is no offline delivery. Announcements and Files
+remain placeholders.
 
-These are automatic background packets. Users do not post anything in the
-Announcements tab or enter another person's address to be discovered.
+The server stores only expiring registrations and display names. Message IDs,
+receipts, retries, and duplicate tracking live in the clients.
+See [deployment details](relay/DEPLOYMENT.md) for server administration.
 
-UDP packets can be lost; repeated hellos and the timeout handle that.
-On two computers, run the same commands on the same local network. The network
-and firewall must allow UDP multicast on port 47001. Some school Wi-Fi networks
-block multicast or communication between laptops. A successful test on one
-computer does not check those network rules. A VPN can also change which
-interface the operating system uses.
+## Relay server
 
-Discovery sends names without authentication or encryption. An online
-label means a recent hello was received, not that TCP chat is connected.
-TCP is still demonstrated separately in the examples below.
-
-## If two computers cannot discover each other
-
-A successful two-window test only proves local discovery. The app sends a
-separate loopback copy, so that test can pass while a firewall blocks the LAN
-packets.
-
-On Ubuntu, check the firewall and recent discovery drops:
+The relay source, tests, service file, and deployment instructions live in
+[relay/](relay/README.md). It handles named registrations, presence, goodbyes,
+and message forwarding. To run the server:
 
 ```bash
-sudo ufw status verbose
-sudo journalctl -k --since '5 minutes ago' --grep 'UFW.*DPT=47001'
+cargo run --locked --bin udp-server
 ```
 
-If UFW blocks the packets, allow only the discovery group and UDP port from
-your local subnet. For example, this rule is for a `192.168.0.0/24` home network;
-replace that subnet if yours is different:
-
-```bash
-sudo ufw allow in proto udp from 192.168.0.0/24 to 239.255.42.99 port 47001 comment 'Bit to Byte discovery'
-```
-
-The rest of the firewall stays enabled. See the
-[UFW rule documentation](https://manpages.ubuntu.com/manpages/noble/man8/ufw.8.html).
-
-WSL 2 normally uses a virtual NAT network. Do not assume an app running inside
-WSL is directly on the home LAN. Check the WSL version in Windows PowerShell:
-
-```powershell
-wsl --list --verbose
-```
-
-On Windows 11 22H2 or newer, WSL's mirrored networking mode supports multicast
-and direct LAN access. Windows and Hyper-V firewall rules still apply. Follow
-[Microsoft's WSL networking guide](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking)
-when configuring it. A native Windows build is another option for testing
-without WSL's virtual network.
-
-## TCP examples for the meeting
-
-There are also two standalone programs that exchange real messages. Start the
-receiver in one terminal and the sender in another:
-
-```bash
-cargo run --locked --example receiver
-cargo run --locked --example sender
-```
-
-For another laptop, pass its receiving address to the sender:
-
-```bash
-cargo run --locked --example sender -- 192.168.1.24:7000
-```
-
-Replace that example IP with the receiving laptop's LAN address. Read the
-[TCP meeting guide](examples/tcp/README.md) for setup, a code walkthrough, and
-steps toward an online list. These examples are separate from the TUI.
-
-## Iroh connection experiment
-
-For automatic LAN address discovery with relays disabled, start:
-
-```bash
-cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-receiver -- --lan
-```
-
-Copy its printed sender command to the other computer. No manual IP address
-or internet connection is needed after building, but the network must allow
-multicast discovery and direct UDP traffic. Wi-Fi client isolation can block
-both; manual IP entry does not bypass it.
-
-To test peer-to-peer connections between Ubuntu and WSL using iroh's NAT
-traversal and relay support, start the separate receiver:
-
-```bash
-cargo run --locked --manifest-path examples/iroh/Cargo.toml --bin iroh-receiver
-```
-
-It prints the sender command to run on the other computer. Read the
-[iroh experiment guide](examples/iroh/README.md) for the two-computer test and a
-relay-only test. This experiment needs Rust 1.91 or newer; the relay-assisted
-mode also needs internet access.
-Its dependencies and lockfile live in `examples/iroh/`; the TUI still uses its
-existing discovery code.
+Plain `cargo run` still launches the messenger and connects to the public relay.
 
 ## Controls
 
@@ -154,7 +62,7 @@ existing discovery code.
 | --- | --- |
 | Tab | Switch between Announcements, Messages, and Files |
 | Up / Down | Select a person in Messages |
-| Enter | Start typing, or add the typed message locally |
+| Enter | Start typing, or send the typed message |
 | Backspace | Remove the last character |
 | Esc | Stop typing and keep the draft |
 | q | Quit while browsing |
@@ -172,19 +80,18 @@ uses Rust's String::pop, so a combined emoji or accent can take multiple presses
 
 ## Code layout
 
-The standalone networking examples live together in `examples/tcp/`. The TUI
-source remains organized as follows:
+The messenger lives in `src/`, and the server lives in `relay/`.
+`--fizzbuzz` still runs the original exercise.
 
 ```text
 src/
   main.rs                Entry point: launch the app
   app/
     mod.rs               Startup, shutdown, and the event loop
-    state.rs             Application data, discovered people, and drafts
+    state.rs             People, messages, delivery status, and drafts
     presence.rs          Update people and mark missing people offline
-    discovery/
-      mod.rs             Send and receive automatic discovery packets
-      socket.rs          Open and configure the UDP sockets
+    network.rs           One UDP socket, registration, chat, receipts, and retries
+    network/tests.rs     Network behavior and real-socket client tests
   tui/
     mod.rs               Declare the terminal modules
     input.rs             Keyboard and paste handling
@@ -200,29 +107,27 @@ src/
 
 In Rust, `mod.rs` is the entry point for a folder's module. Read `src/main.rs`,
 then `src/app/mod.rs` and `src/app/state.rs`. Terminal details live in `src/tui/`;
-tests stay together in `src/tests/`.
+UI/presence tests live in `src/tests/`. Server tests live in `relay/tests.rs`.
 
-To walk through discovery at a meeting, read these in order:
+To walk through messaging at a meeting, read these in order:
 
-1. `app/state.rs`: a person has a name, online status, and last-seen time.
+1. `app/state.rs`: each person has messages and a draft. A message's text, author,
+   and delivery status are separate fields.
 2. `app/presence.rs`: a hello marks someone online; a goodbye or timeout marks
    them offline.
-3. `app/discovery/mod.rs`: `update` sends a hello when due, receives packets,
-   and checks for missing people.
-4. `app/discovery/socket.rs`: the operating-system settings that make local
-   network discovery and multiple windows work.
+3. `app/network.rs`: `update` calls a short sequence of named steps to refresh
+   registration, read packets, queue messages, retry, and forget old duplicates.
+4. `relay/server.rs`: registration-based presence and message routing.
 
 For example, Enter produces a Crossterm event. The loop in `src/app/mod.rs`
-passes it to `src/tui/input.rs`, which updates the selected person's messages.
-The next loop calls `src/tui/render.rs` to draw that change.
+passes it to `src/tui/input.rs`, which adds the selected person's message to the
+outbox. The next loop sends it through `app/network.rs` and draws its delivery
+status through `src/tui/render.rs`.
 
-The dependencies are **Ratatui** for drawing, **Crossterm** for terminal events,
-and **socket2** for configuring the discovery socket before binding it. Sharing
-the multicast port lets two windows run on the same computer. See the
-[socket2 documentation](https://docs.rs/socket2/0.6.5/socket2/struct.Socket.html)
-for these socket options.
+The dependencies include **Ratatui** for drawing, **Crossterm** for terminal events,
+and **getrandom** for fresh client IDs. Networking uses the standard UDP socket.
 
-The same event loop updates discovery and draws the screen. It waits up to
+The same event loop updates the network and draws the screen. It waits up to
 200 milliseconds for keyboard input between updates. There are no extra app
 threads or asynchronous functions.
 
@@ -231,10 +136,12 @@ threads or asynchronous functions.
 ```bash
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+cargo test --locked --all-targets
+cargo build --locked --bins
+python3 relay/test_relay.py
 ```
 
 The code uses named fields, explicit returns, ordinary loops, and match branches.
 There are no question-mark error operators, if-let shortcuts, custom macros, or
 iterator chains. The small callbacks in drawing and terminal cleanup are required
-by the libraries. See CONTRIBUTING.md for the same conventions.
+by the libraries.

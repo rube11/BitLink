@@ -3,21 +3,18 @@ name = "bit-to-byte"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "A readable terminal interface for a future peer-to-peer club messenger"
+description = "A readable terminal messenger using the club UDP relay"
 publish = false
+default-run = "bit-to-byte"
 
-[[example]]
-name = "receiver"
-path = "examples/tcp/receiver.rs"
-
-[[example]]
-name = "sender"
-path = "examples/tcp/sender.rs"
+[[bin]]
+name = "udp-server"
+path = "relay/server.rs"
 
 [dependencies]
+getrandom = "0.3"
 crossterm = "0.29"
 ratatui = "0.30.2"
-socket2 = { version = "0.6", features = ["all"] }
 
 # Prefer explicit error branches and named fields for members learning Rust.
 [lints.clippy]
@@ -27,3 +24,4 @@ needless_return = "allow"
 single_match = "allow"
 while_let_loop = "allow"
 needless_bool_assign = "allow"
+manual_find = "allow"

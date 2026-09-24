@@ -7,7 +7,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-use crate::app::state::{App, Person};
+use crate::app::state::{App, Message, Person};
 use crate::tui::{input, render};
 
 fn sample_app() -> App {
@@ -18,7 +18,7 @@ fn sample_app() -> App {
             name: String::from(name),
             online: true,
             last_seen: std::time::Instant::now(),
-            messages: vec![String::from("This is a sample conversation.")],
+            messages: vec![Message::received("This is a sample conversation.")],
             draft: String::new(),
         });
     }

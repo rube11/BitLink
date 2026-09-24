@@ -199,7 +199,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     let messages_area = rows[1];
     let input_area = rows[2];
 
-    let description = "Local messages only";
+    let description = "Relayed chat · unencrypted demo";
     let heading = Paragraph::new(vec![
         Line::styled(
             person.name.as_str(),
@@ -211,21 +211,16 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut messages = Vec::new();
     for message in &person.messages {
-        let author;
-        let body;
-        let author_color;
-        match message.strip_prefix("You: ") {
-            Some(text) => {
-                author = "You";
-                body = text;
-                author_color = theme::ACCENT;
-            }
-            None => {
-                author = person.name.as_str();
-                body = message.as_str();
-                author_color = theme::MUTED;
-            }
+        let mut author = person.name.as_str();
+        let mut author_color = theme::MUTED;
+        if message.from_me {
+            author = "You";
+            author_color = theme::ACCENT;
         }
+        let body = match &message.delivery {
+            Some(delivery) => format!("[{}] {}", delivery.label(), message.text),
+            None => message.text.clone(),
+        };
         let mut lines = vec![
             Line::styled(author, Style::default().fg(author_color)),
             Line::raw(body),
@@ -376,7 +371,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
     if app.typing {
         shortcuts = vec![
             Span::styled("Enter", key_style),
-            Span::raw(" add locally   "),
+            Span::raw(" send   "),
             Span::styled("Esc", key_style),
             Span::raw(" keep draft   "),
             Span::styled("Ctrl+C", key_style),
@@ -385,7 +380,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
     }
     let controls = Paragraph::new(vec![
         Line::from(shortcuts),
-        Line::raw(format!("Chat stays local · You: {}", app.name)),
+        Line::raw(format!("{} · You: {}", app.network_status, app.name)),
     ])
     .style(Style::default().fg(theme::MUTED));
     frame.render_widget(controls, area);

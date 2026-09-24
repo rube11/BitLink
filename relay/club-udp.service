@@ -1,0 +1,18 @@
+[Unit]
+Description=Club UDP presence and chat relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=club-relay
+Group=club-relay
+ExecStart=/opt/club-relay/udp-server 0.0.0.0:47002
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

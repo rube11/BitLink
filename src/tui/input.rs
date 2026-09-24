@@ -2,7 +2,9 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::state::{App, View};
+use crate::app::state::{
+    App, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message, OutgoingMessage, View,
+};
 
 pub fn handle_event(app: &mut App, event: Event) {
     match event {
@@ -100,7 +102,15 @@ fn handle_typing(app: &mut App, key: KeyCode) {
         KeyCode::Enter => {
             let message = person.draft.trim();
             if !message.is_empty() {
-                person.messages.push(format!("You: {}", message));
+                if !person.online || app.outbox.len() >= MAX_PENDING_MESSAGES {
+                    return;
+                }
+                app.outbox.push(OutgoingMessage {
+                    person_id: person.id.clone(),
+                    text: String::from(message),
+                    message_index: person.messages.len(),
+                });
+                person.messages.push(Message::sent(message));
                 person.draft.clear();
             }
         }
@@ -111,7 +121,7 @@ fn handle_typing(app: &mut App, key: KeyCode) {
 fn append_text(draft: &mut String, text: &str) {
     let mut character_count = draft.chars().count();
     for character in text.chars() {
-        if character_count >= 500 {
+        if character_count >= MAX_MESSAGE_CHARACTERS {
             return;
         }
 

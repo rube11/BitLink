@@ -1,6 +1,6 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::state::View;
+use crate::app::state::{Message, View};
 use crate::tui::input;
 
 use super::{draw_screen, press, sample_app};
@@ -18,7 +18,7 @@ fn typing_keeps_shortcuts_as_text_and_only_adds_nonempty_messages() {
     assert_eq!(app.view, View::Messages);
     assert_eq!(app.people[0].draft, "q");
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.people[0].messages[1], "You: q");
+    assert_eq!(app.people[0].messages[1], Message::sent("q"));
     assert_eq!(app.people[0].draft, "");
 }
 
@@ -33,11 +33,28 @@ fn changing_people_preserves_each_draft_and_message_recipient() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('b'));
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.people[1].messages[1], "You: b");
+    assert_eq!(app.people[1].messages[1], Message::sent("b"));
+    assert_eq!(app.outbox.len(), 1);
+    assert_eq!(app.outbox[0].person_id, app.people[1].id);
+    assert_eq!(app.outbox[0].text, "b");
+    assert_eq!(app.outbox[0].message_index, 1);
     assert_eq!(app.people[0].messages.len(), 1);
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Up);
     assert_eq!(app.people[app.selected_person].draft, "a");
+}
+
+#[test]
+fn offline_people_keep_drafts_without_queuing_a_message() {
+    let mut app = sample_app();
+    app.people[0].online = false;
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    input::handle_event(&mut app, Event::Paste(String::from("save for later")));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.people[0].draft, "save for later");
+    assert_eq!(app.people[0].messages.len(), 1);
+    assert!(app.outbox.is_empty());
 }
 
 #[test]
