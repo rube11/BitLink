@@ -3,7 +3,8 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::state::{
-    App, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message, OutgoingMessage, View,
+    App, MAX_MESSAGE_BYTES, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message, OutgoingMessage,
+    View,
 };
 
 pub fn handle_event(app: &mut App, event: Event) {
@@ -122,6 +123,9 @@ fn append_text(draft: &mut String, text: &str) {
     let mut character_count = draft.chars().count();
     for character in text.chars() {
         if character_count >= MAX_MESSAGE_CHARACTERS {
+            return;
+        }
+        if draft.len() + character.len_utf8() > MAX_MESSAGE_BYTES {
             return;
         }
 

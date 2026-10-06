@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::presence::{OFFLINE_AFTER, receive_packet, remove_missing_people};
-use crate::app::state::{Message, View};
+use crate::app::state::{MAX_MESSAGE_BYTES, Message, View};
 use crate::tui::input;
 
 use super::{draw_screen, press, sample_app};
@@ -85,6 +85,10 @@ fn paste_is_bounded_and_cannot_submit_or_quit() {
     assert!(app.running);
     input::handle_event(&mut app, Event::Paste("x".repeat(1000)));
     assert_eq!(app.people[0].draft.chars().count(), 500);
+    app.people[0].draft.clear();
+    input::handle_event(&mut app, Event::Paste("😀".repeat(500)));
+    assert_eq!(app.people[0].draft.len(), MAX_MESSAGE_BYTES);
+    assert_eq!(app.people[0].draft.chars().count(), 350);
 }
 
 #[test]

@@ -1,25 +1,14 @@
-// Talk to the relay server over one UDP socket.
-//
-// Every two seconds we send:    REGISTER <our id> <our name>
-// The relay answers with:       REGISTERED <our public address>
-// followed by a hello packet for each other named person (see presence.rs).
-//
-// To chat we send:              RELAY <person id> <token> CHAT <text>
-// The relay forwards it as:     FROM <sender id> <token> CHAT <text>
-// The receiving app answers:    RELAY <sender id> <token> RECEIPT
-// which arrives back as:        FROM <person id> <token> RECEIPT
-//
-// UDP can lose packets, so we resend a message until its receipt arrives or
-// we give up. The token lets both sides recognise repeats of the same message.
+// Encrypted chat and receipts use the relay; retries reuse their ciphertext.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use crate::app::presence;
 use crate::app::state::{
-    App, Delivery, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message, OutgoingMessage,
+    App, Delivery, MAX_MESSAGE_BYTES, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message,
+    OutgoingMessage,
 };
+use crate::app::{crypto, presence};
 
 pub const DEFAULT_SERVER: &str = "32.189.170.75:47002";
 
@@ -37,6 +26,7 @@ const RANDOM_ID_BYTES: usize = 12;
 struct PendingMessage {
     outgoing: OutgoingMessage,
     token: String,
+    encrypted_payload: String,
     first_sent: Instant,
     next_send: Instant,
 }
@@ -52,9 +42,11 @@ pub struct Network {
     socket: UdpSocket,
     server: SocketAddr,
     id: String,
-    name: String,
+    pub(super) name: String,
+    key: [u8; 32],
     next_register: Instant,
     last_server_reply: Option<Instant>,
+    registration_error: Option<&'static str>,
     next_token_number: u64,
     pending: Vec<PendingMessage>,
     received: Vec<ReceivedMessage>,
@@ -62,11 +54,11 @@ pub struct Network {
 
 impl Network {
     // chosen_name is None when the user did not pass --name.
-    pub fn connect(chosen_name: Option<String>) -> io::Result<Network> {
-        return Network::connect_to(chosen_name, DEFAULT_SERVER);
-    }
-
-    fn connect_to(chosen_name: Option<String>, server: &str) -> io::Result<Network> {
+    pub fn connect(
+        chosen_name: Option<String>,
+        server: &str,
+        key: [u8; 32],
+    ) -> io::Result<Network> {
         let server: SocketAddr = match server.parse() {
             Ok(address) => address,
             Err(error) => return Err(io::Error::other(error)),
@@ -104,21 +96,18 @@ impl Network {
             server: server,
             id: id,
             name: name,
+            key: key,
             next_register: Instant::now(),
             last_server_reply: None,
+            registration_error: None,
             next_token_number: 0,
             pending: Vec::new(),
             received: Vec::new(),
         });
     }
 
-    pub fn name(&self) -> &str {
-        return &self.name;
-    }
-
     // Called once per event loop iteration.
-    pub fn update(&mut self, app: &mut App) {
-        let now = Instant::now();
+    pub fn update(&mut self, app: &mut App, now: Instant) {
         if now >= self.next_register {
             self.send(&format!("REGISTER {} {}", self.id, self.name));
             self.next_register = now + REGISTER_EVERY;
@@ -127,10 +116,10 @@ impl Network {
         let connected = self
             .last_server_reply
             .is_some_and(|reply| now.duration_since(reply) < RELAY_SILENT_AFTER);
-        app.network_status = String::from(if connected {
-            "Relay connected"
-        } else {
-            "Relay unavailable · retrying"
+        app.network_status = String::from(match self.registration_error {
+            Some(error) => error,
+            None if connected => "Relay connected",
+            None => "Relay unavailable · retrying",
         });
         presence::remove_missing_people(app, now);
         self.sync_peers(app);
@@ -138,14 +127,6 @@ impl Network {
         self.resend_pending_messages(app, now);
         self.received
             .retain(|message| now.duration_since(message.received_at) < REMEMBER_RECEIVED_FOR);
-    }
-
-    fn sync_peers(&mut self, app: &App) {
-        self.pending.retain(|message| {
-            app.people
-                .iter()
-                .any(|person| person.id == message.outgoing.person_id)
-        });
     }
 
     pub fn goodbye(&self) {
@@ -165,10 +146,6 @@ impl Network {
                     break;
                 }
             };
-            // Only trust packets from the relay we registered with.
-            if source != self.server {
-                continue;
-            }
             // A packet that fills the whole buffer may have been cut short.
             if count == buffer.len() {
                 continue;
@@ -177,13 +154,25 @@ impl Network {
                 Ok(text) => text,
                 Err(_) => continue,
             };
-            self.handle_packet(app, text, now);
+            if source == self.server {
+                self.handle_packet(app, text, now);
+            }
         }
     }
 
     fn handle_packet(&mut self, app: &mut App, text: &str, now: Instant) {
         if text.starts_with("REGISTERED ") {
             self.last_server_reply = Some(now);
+            self.registration_error = None;
+            return;
+        }
+        if text == "ERROR address-in-use" || text == "ERROR id-in-use" {
+            self.last_server_reply = None;
+            self.registration_error = Some(if text == "ERROR address-in-use" {
+                "Reconnect blocked · retrying"
+            } else {
+                "Session ID in use · retrying"
+            });
             return;
         }
         if text.starts_with("bit-to-byte/1\n") {
@@ -191,44 +180,39 @@ impl Network {
             self.sync_peers(app);
             return;
         }
-
-        // FROM <sender id> <token> CHAT <text>   or   FROM <sender id> <token> RECEIPT
-        let mut words = Vec::new();
-        for word in text.splitn(5, ' ') {
-            words.push(word);
-        }
-        if words.len() < 4 || words[0] != "FROM" {
-            return;
-        }
-        let sender_id = words[1];
-        let token = words[2];
-        let kind = words[3];
-        let mut body = "";
-        if words.len() == 5 {
-            body = words[4];
-        }
-        if token.is_empty() || token.len() > MAX_TOKEN_BYTES {
-            return;
-        }
-
-        if kind == "RECEIPT" && body.is_empty() {
-            self.handle_receipt(app, sender_id, token);
-        } else if kind == "CHAT" {
-            self.handle_chat(app, sender_id, token, body, now);
-        }
-    }
-
-    fn handle_receipt(&mut self, app: &mut App, sender_id: &str, token: &str) {
-        let mut index = 0;
-        while index < self.pending.len() {
-            let matches = self.pending[index].outgoing.person_id == sender_id
-                && self.pending[index].token == token;
-            if matches {
-                let confirmed = self.pending.remove(index);
-                mark_delivery(app, &confirmed.outgoing, Delivery::Delivered);
-                return;
+        // Only encrypted chat packets are accepted. Never fall back to plaintext.
+        let mut words = text.splitn(4, ' ');
+        let (sender_id, encrypted) = match (words.next(), words.next(), words.next(), words.next())
+        {
+            (Some("FROM"), Some(sender), Some("ENC1"), Some(encrypted)) => (sender, encrypted),
+            _ => return,
+        };
+        let plaintext = match crypto::decrypt(&self.key, sender_id, &self.id, encrypted) {
+            Ok(plaintext) => plaintext,
+            Err(_) => return,
+        };
+        let mut fields = plaintext.splitn(3, ' ');
+        let (token, kind) = match (fields.next(), fields.next()) {
+            (Some(token), Some(kind)) if !token.is_empty() && token.len() <= MAX_TOKEN_BYTES => {
+                (token, kind)
             }
-            index += 1;
+            _ => return,
+        };
+        let body = fields.next().unwrap_or("");
+
+        match (kind, body) {
+            ("RECEIPT", "") => {
+                if let Some(index) = self.pending.iter().position(|message| {
+                    message.outgoing.person_id == sender_id && message.token == token
+                }) {
+                    let confirmed = self.pending.remove(index);
+                    mark_delivery(app, &confirmed.outgoing, Delivery::Delivered);
+                }
+            }
+            ("CHAT", _) => {
+                self.handle_chat(app, sender_id, token, body, now);
+            }
+            _ => {}
         }
     }
 
@@ -240,13 +224,12 @@ impl Network {
         text: &str,
         now: Instant,
     ) {
-        if text.is_empty() || text.chars().count() > MAX_MESSAGE_CHARACTERS {
+        if text.is_empty()
+            || text.len() > MAX_MESSAGE_BYTES
+            || text.chars().count() > MAX_MESSAGE_CHARACTERS
+            || text.chars().any(char::is_control)
+        {
             return;
-        }
-        for character in text.chars() {
-            if character.is_control() {
-                return;
-            }
         }
         // Only accept messages from people in our list.
         let person = match app.find_person(sender_id) {
@@ -270,21 +253,32 @@ impl Network {
             });
         }
         // Send a receipt even for a repeat, because the first one may have been lost.
-        self.send(&format!("RELAY {} {} RECEIPT", sender_id, token));
+        if let Ok(packet) = self.encrypted_payload(sender_id, &format!("{} RECEIPT", token)) {
+            self.send(&format!("RELAY {} {}", sender_id, packet));
+        }
     }
 
     // Move messages the user just sent from the app outbox into our pending list.
     fn queue_outgoing_messages(&mut self, app: &mut App, now: Instant) {
-        while !app.outbox.is_empty() {
-            let outgoing = app.outbox.remove(0);
+        for outgoing in std::mem::take(&mut app.outbox) {
             if self.pending.len() >= MAX_PENDING_MESSAGES {
                 mark_delivery(app, &outgoing, Delivery::Unconfirmed);
                 continue;
             }
             self.next_token_number += 1;
+            let token = format!("{}-{}", self.id, self.next_token_number);
+            let payload = format!("{} CHAT {}", token, outgoing.text);
+            let packet = match self.encrypted_payload(&outgoing.person_id, &payload) {
+                Ok(packet) => packet,
+                Err(_) => {
+                    mark_delivery(app, &outgoing, Delivery::Unconfirmed);
+                    continue;
+                }
+            };
             self.pending.push(PendingMessage {
                 outgoing: outgoing,
-                token: format!("{}-{}", self.id, self.next_token_number),
+                token: token,
+                encrypted_payload: packet,
                 first_sent: now,
                 next_send: now,
             });
@@ -301,17 +295,38 @@ impl Network {
                 continue;
             }
             if now >= self.pending[index].next_send {
-                let packet = format!(
-                    "RELAY {} {} CHAT {}",
-                    self.pending[index].outgoing.person_id,
-                    self.pending[index].token,
-                    self.pending[index].outgoing.text
-                );
-                self.send(&packet);
+                // Retry the exact encrypted packet, including its original nonce.
+                let pending = &self.pending[index];
+                self.send(&format!(
+                    "RELAY {} {}",
+                    pending.outgoing.person_id, pending.encrypted_payload
+                ));
                 self.pending[index].next_send = now + RESEND_EVERY;
             }
             index += 1;
         }
+    }
+
+    fn encrypted_payload(&self, recipient: &str, payload: &str) -> io::Result<String> {
+        let encrypted = match crypto::encrypt(&self.key, &self.id, recipient, payload) {
+            Ok(encrypted) => encrypted,
+            Err(error) => return Err(error),
+        };
+        // ENC1 and its space also count toward the deployed relay's 2100-byte limit.
+        if encrypted.len() + 5 > 2100 {
+            return Err(io::Error::other(
+                "Encrypted message is too large for the relay.",
+            ));
+        }
+        return Ok(format!("ENC1 {}", encrypted));
+    }
+
+    fn sync_peers(&mut self, app: &App) {
+        self.pending.retain(|message| {
+            app.people
+                .iter()
+                .any(|person| person.id == message.outgoing.person_id)
+        });
     }
 
     fn send(&self, packet: &str) {
@@ -326,11 +341,8 @@ fn mark_delivery(app: &mut App, outgoing: &OutgoingMessage, delivery: Delivery) 
         Some(person) => person,
         None => return,
     };
-    match person.messages.get_mut(outgoing.message_index) {
-        Some(message) => {
-            message.delivery = Some(delivery);
-        }
-        None => {}
+    if let Some(message) = person.messages.get_mut(outgoing.message_index) {
+        message.delivery = Some(delivery);
     }
 }
 

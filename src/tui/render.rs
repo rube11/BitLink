@@ -8,7 +8,7 @@ use ratatui::widgets::{
     Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap,
 };
 
-use crate::app::state::{App, View};
+use crate::app::state::{App, Delivery, View};
 use crate::tui::theme;
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -199,7 +199,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     let messages_area = rows[1];
     let input_area = rows[2];
 
-    let description = "Relayed chat · unencrypted demo";
+    let description = "Encrypted chat · shared key";
     let heading = Paragraph::new(vec![
         Line::styled(
             person.name.as_str(),
@@ -218,7 +218,14 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
             author_color = theme::ACCENT;
         }
         let body = match &message.delivery {
-            Some(delivery) => format!("[{}] {}", delivery.label(), message.text),
+            Some(delivery) => {
+                let label = match delivery {
+                    Delivery::Sending => "sending",
+                    Delivery::Delivered => "delivered",
+                    Delivery::Unconfirmed => "unconfirmed",
+                };
+                format!("[{}] {}", label, message.text)
+            }
             None => message.text.clone(),
         };
         let mut lines = vec![

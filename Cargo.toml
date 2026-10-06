@@ -15,6 +15,8 @@ path = "relay/server.rs"
 getrandom = "0.3"
 crossterm = "0.29"
 ratatui = "0.30.2"
+chacha20poly1305 = "0.11.0"
+base64 = "0.23.1"
 
 # Prefer explicit error branches and named fields for members learning Rust.
 [lints.clippy]

@@ -1,14 +1,15 @@
 // Application startup and the event loop.
+mod crypto;
 pub mod network;
 pub mod presence;
 pub mod state;
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event;
 
-use crate::app::network::Network;
+use crate::app::network::{DEFAULT_SERVER, Network};
 use crate::app::state::App;
 use crate::tui::{input, render, terminal};
 
@@ -46,11 +47,15 @@ pub fn run() -> io::Result<()> {
             }
         }
     }
-    let mut network = match Network::connect(chosen_name) {
+    let key = match crypto::load_key() {
+        Ok(key) => key,
+        Err(error) => return Err(error),
+    };
+    let mut network = match Network::connect(chosen_name, DEFAULT_SERVER, key) {
         Ok(network) => network,
         Err(error) => return Err(error),
     };
-    app.name = String::from(network.name());
+    app.name = network.name.clone();
     let mut terminal = match terminal::start() {
         Ok(terminal) => terminal,
         Err(error) => return Err(error),
@@ -83,7 +88,7 @@ fn run_event_loop(
     network: &mut Network,
 ) -> io::Result<()> {
     while app.running {
-        network.update(app);
+        network.update(app, Instant::now());
         // Ratatui needs a callback so it can provide the frame to draw on.
         let draw_result = terminal.draw(|frame| {
             render::draw(frame, app);

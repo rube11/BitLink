@@ -3,6 +3,8 @@
 use std::time::Instant;
 
 pub const MAX_MESSAGE_CHARACTERS: usize = 500;
+// Leave room for encryption and Base64 inside the relay's packet limit.
+pub const MAX_MESSAGE_BYTES: usize = 1400;
 pub const MAX_PENDING_MESSAGES: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21,16 +23,6 @@ pub enum Delivery {
     Delivered,
     // No confirmation arrived in time. The message may still have arrived.
     Unconfirmed,
-}
-
-impl Delivery {
-    pub fn label(&self) -> &str {
-        match self {
-            Delivery::Sending => return "sending",
-            Delivery::Delivered => return "delivered",
-            Delivery::Unconfirmed => return "unconfirmed",
-        }
-    }
 }
 
 // One line in a conversation.
@@ -104,7 +96,7 @@ impl App {
                 String::from("Open the app with internet access to join the people list."),
                 String::from("People disappear when they leave or their connection times out."),
                 String::from(
-                    "Demo chat is relayed without encryption. History lasts while a person is listed.",
+                    "Chat uses a shared secret key. History lasts while a person is listed.",
                 ),
             ],
         };
