@@ -1,5 +1,7 @@
 use super::*;
 
+mod direct;
+
 const TEST_KEY: [u8; 32] = [7_u8; 32];
 
 fn incoming(network: &Network, sender: &str, payload: &str) -> String {
