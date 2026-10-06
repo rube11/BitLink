@@ -1,5 +1,6 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::app::presence::{OFFLINE_AFTER, receive_packet, remove_missing_people};
 use crate::app::state::{Message, View};
 use crate::tui::input;
 
@@ -45,16 +46,30 @@ fn changing_people_preserves_each_draft_and_message_recipient() {
 }
 
 #[test]
-fn offline_people_keep_drafts_without_queuing_a_message() {
+fn removing_people_preserves_selection_and_stops_typing_when_the_recipient_leaves() {
     let mut app = sample_app();
-    app.people[0].online = false;
     press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Enter);
-    input::handle_event(&mut app, Event::Paste(String::from("save for later")));
+    press(&mut app, KeyCode::Char('a'));
+    let now = std::time::Instant::now();
+    receive_packet(&mut app, "bit-to-byte/1\ngoodbye\nMaya\nMaya", "self", now);
+    assert_eq!(app.selected_person, 0);
+    assert_eq!(app.people[0].id, "Alex");
+    assert_eq!(app.people[0].draft, "a");
+    assert!(app.typing);
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.people[0].draft, "save for later");
-    assert_eq!(app.people[0].messages.len(), 1);
+    assert_eq!(app.outbox.len(), 1);
+    receive_packet(&mut app, "bit-to-byte/1\ngoodbye\nAlex\nAlex", "self", now);
+    assert!(!app.typing);
+    assert_eq!(app.people[app.selected_person].id, "Sam");
     assert!(app.outbox.is_empty());
+    press(&mut app, KeyCode::Char('x'));
+    assert!(app.people[0].draft.is_empty());
+    remove_missing_people(&mut app, now + OFFLINE_AFTER);
+    assert!(app.people.is_empty());
+    assert_eq!(app.selected_person, 0);
+    assert!(draw_screen(&app, 80, 24).contains("No conversations yet"));
 }
 
 #[test]

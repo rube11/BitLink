@@ -244,18 +244,12 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_people(frame: &mut Frame, area: Rect, app: &App) {
     let mut people = Vec::new();
     for person in &app.people {
-        let mut status = "[offline]";
-        let mut status_color = theme::MUTED;
-        if person.online {
-            status = "[online]";
-            status_color = theme::ACCENT;
-        }
         let person_label = vec![
             Line::styled(
                 person.name.as_str(),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Line::styled(status, Style::default().fg(status_color)),
+            Line::styled("[online]", Style::default().fg(theme::ACCENT)),
         ];
         people.push(ListItem::new(person_label));
     }

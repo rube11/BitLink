@@ -16,7 +16,6 @@ fn sample_app() -> App {
         app.people.push(Person {
             id: String::from(name),
             name: String::from(name),
-            online: true,
             last_seen: std::time::Instant::now(),
             messages: vec![Message::received("This is a sample conversation.")],
             draft: String::new(),

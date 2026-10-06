@@ -119,25 +119,37 @@ impl Network {
     // Called once per event loop iteration.
     pub fn update(&mut self, app: &mut App) {
         let now = Instant::now();
-        self.register_if_due(now);
+        if now >= self.next_register {
+            self.send(&format!("REGISTER {} {}", self.id, self.name));
+            self.next_register = now + REGISTER_EVERY;
+        }
         self.receive_packets(app, now);
-        self.update_status(app, now);
-        presence::mark_missing_people_offline(app, now);
+        let connected = self
+            .last_server_reply
+            .is_some_and(|reply| now.duration_since(reply) < RELAY_SILENT_AFTER);
+        app.network_status = String::from(if connected {
+            "Relay connected"
+        } else {
+            "Relay unavailable · retrying"
+        });
+        presence::remove_missing_people(app, now);
+        self.sync_peers(app);
         self.queue_outgoing_messages(app, now);
         self.resend_pending_messages(app, now);
-        self.forget_old_received_messages(now);
+        self.received
+            .retain(|message| now.duration_since(message.received_at) < REMEMBER_RECEIVED_FOR);
+    }
+
+    fn sync_peers(&mut self, app: &App) {
+        self.pending.retain(|message| {
+            app.people
+                .iter()
+                .any(|person| person.id == message.outgoing.person_id)
+        });
     }
 
     pub fn goodbye(&self) {
         self.send(&format!("GOODBYE {}", self.id));
-    }
-
-    fn register_if_due(&mut self, now: Instant) {
-        if now < self.next_register {
-            return;
-        }
-        self.send(&format!("REGISTER {} {}", self.id, self.name));
-        self.next_register = now + REGISTER_EVERY;
     }
 
     fn receive_packets(&mut self, app: &mut App, now: Instant) {
@@ -174,8 +186,9 @@ impl Network {
             self.last_server_reply = Some(now);
             return;
         }
-        if presence::is_presence_packet(text) {
+        if text.starts_with("bit-to-byte/1\n") {
             presence::receive_packet(app, text, &self.id, now);
+            self.sync_peers(app);
             return;
         }
 
@@ -241,7 +254,11 @@ impl Network {
             None => return,
         };
 
-        if !self.already_received(sender_id, token) {
+        let already_received = self
+            .received
+            .iter()
+            .any(|message| message.sender_id == sender_id && message.token == token);
+        if !already_received {
             if self.received.len() >= MAX_REMEMBERED_MESSAGES {
                 return;
             }
@@ -254,32 +271,6 @@ impl Network {
         }
         // Send a receipt even for a repeat, because the first one may have been lost.
         self.send(&format!("RELAY {} {} RECEIPT", sender_id, token));
-    }
-
-    fn already_received(&self, sender_id: &str, token: &str) -> bool {
-        for received in &self.received {
-            if received.sender_id == sender_id && received.token == token {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    fn update_status(&self, app: &mut App, now: Instant) {
-        let mut connected = false;
-        match self.last_server_reply {
-            Some(reply_time) => {
-                if now.duration_since(reply_time) < RELAY_SILENT_AFTER {
-                    connected = true;
-                }
-            }
-            None => {}
-        }
-        if connected {
-            app.network_status = String::from("Relay connected");
-        } else {
-            app.network_status = String::from("Relay unavailable · retrying");
-        }
     }
 
     // Move messages the user just sent from the app outbox into our pending list.
@@ -320,17 +311,6 @@ impl Network {
                 self.pending[index].next_send = now + RESEND_EVERY;
             }
             index += 1;
-        }
-    }
-
-    fn forget_old_received_messages(&mut self, now: Instant) {
-        let mut index = 0;
-        while index < self.received.len() {
-            if now.duration_since(self.received[index].received_at) >= REMEMBER_RECEIVED_FOR {
-                self.received.remove(index);
-            } else {
-                index += 1;
-            }
         }
     }
 

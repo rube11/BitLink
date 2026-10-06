@@ -63,7 +63,6 @@ impl Message {
 pub struct Person {
     pub id: String,
     pub name: String,
-    pub online: bool,
     pub last_seen: Instant,
     pub messages: Vec<Message>,
     pub draft: String,
@@ -103,9 +102,9 @@ impl App {
             announcements: vec![
                 String::from("Welcome to Bit to Byte."),
                 String::from("Open the app with internet access to join the people list."),
-                String::from("People stay listed as offline when they leave."),
+                String::from("People disappear when they leave or their connection times out."),
                 String::from(
-                    "Demo chat is relayed without encryption. History lasts until you quit.",
+                    "Demo chat is relayed without encryption. History lasts while a person is listed.",
                 ),
             ],
         };
@@ -119,5 +118,16 @@ impl App {
             }
         }
         return None;
+    }
+
+    pub fn remove_person(&mut self, index: usize) {
+        let person = self.people.remove(index);
+        self.outbox.retain(|message| message.person_id != person.id);
+        if index < self.selected_person {
+            self.selected_person -= 1;
+        } else if index == self.selected_person {
+            self.typing = false;
+            self.selected_person = index.min(self.people.len().saturating_sub(1));
+        }
     }
 }

@@ -1,20 +1,17 @@
 use std::time::{Duration, Instant};
 
-use crate::app::presence::{
-    OFFLINE_AFTER, is_valid_name, mark_missing_people_offline, receive_packet,
-};
+use crate::app::presence::{OFFLINE_AFTER, is_valid_name, receive_packet, remove_missing_people};
 use crate::app::state::{App, Message, View};
 
 use super::draw_screen;
 
 #[test]
-fn hellos_update_one_person_and_goodbye_preserves_their_conversation() {
+fn hellos_update_one_person_and_goodbye_removes_their_conversation() {
     let mut app = App::new();
     let now = Instant::now();
     let hello = "bit-to-byte/1\nhello\nalice-1\nAlice";
     receive_packet(&mut app, hello, "self", now);
     assert_eq!(app.people.len(), 1);
-    assert!(app.people[0].online);
     app.people[0].messages.push(Message::sent("Hello"));
     app.people[0].draft = String::from("Keep this draft");
 
@@ -31,14 +28,20 @@ fn hellos_update_one_person_and_goodbye_preserves_their_conversation() {
         "self",
         now + Duration::from_secs(3),
     );
-    assert_eq!(app.people.len(), 2);
-    assert!(!app.people[0].online);
-    assert!(app.people[1].online);
-    assert_eq!(app.people[0].messages, vec![Message::sent("Hello")]);
-    assert_eq!(app.people[0].draft, "Keep this draft");
+    assert_eq!(app.people.len(), 1);
+    assert_eq!(app.people[0].id, "bob-1");
     let screen = draw_screen(&app, 80, 24);
-    assert!(screen.contains("[offline]"));
     assert!(screen.contains("[online]"));
+    assert!(!screen.contains("Alice"));
+    receive_packet(
+        &mut app,
+        "bit-to-byte/1\nhello\nalice-2\nAlice",
+        "self",
+        now,
+    );
+    assert_eq!(app.people.len(), 2);
+    assert!(app.people[1].messages.is_empty());
+    assert!(app.people[1].draft.is_empty());
 }
 
 #[test]
@@ -47,10 +50,10 @@ fn missed_hellos_expire_and_a_later_hello_restores_the_person() {
     let now = Instant::now();
     let hello = "bit-to-byte/1\nhello\nalice-1\nAlice";
     receive_packet(&mut app, hello, "self", now);
-    mark_missing_people_offline(&mut app, now + OFFLINE_AFTER - Duration::from_millis(1));
-    assert!(app.people[0].online);
-    mark_missing_people_offline(&mut app, now + OFFLINE_AFTER);
-    assert!(!app.people[0].online);
+    remove_missing_people(&mut app, now + OFFLINE_AFTER - Duration::from_millis(1));
+    assert_eq!(app.people.len(), 1);
+    remove_missing_people(&mut app, now + OFFLINE_AFTER);
+    assert!(app.people.is_empty());
     receive_packet(
         &mut app,
         hello,
@@ -58,7 +61,7 @@ fn missed_hellos_expire_and_a_later_hello_restores_the_person() {
         now + OFFLINE_AFTER + Duration::from_secs(1),
     );
     assert_eq!(app.people.len(), 1);
-    assert!(app.people[0].online);
+    assert_eq!(app.people[0].id, "alice-1");
 }
 
 #[test]
@@ -69,15 +72,15 @@ fn duplicate_names_are_separate_people_and_self_packets_are_ignored() {
     assert!(app.people.is_empty());
     receive_packet(&mut app, "bit-to-byte/1\nhello\nalex-1\nAlex", "self", now);
     receive_packet(&mut app, "bit-to-byte/1\nhello\nalex-2\nAlex", "self", now);
+    assert_eq!(app.people.len(), 2);
     receive_packet(
         &mut app,
         "bit-to-byte/1\ngoodbye\nalex-1\nAlex",
         "self",
         now,
     );
-    assert_eq!(app.people.len(), 2);
-    assert!(!app.people[0].online);
-    assert!(app.people[1].online);
+    assert_eq!(app.people.len(), 1);
+    assert_eq!(app.people[0].id, "alex-2");
 }
 
 #[test]

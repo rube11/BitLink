@@ -96,7 +96,6 @@ fn socket_traffic_covers_registration_retries_receipts_and_goodbye() {
     network.update(&mut app);
     assert_eq!(app.network_status, "Relay connected");
     assert_eq!(app.people.len(), 1);
-    assert!(app.people[0].online);
 
     app.people[0].messages.push(Message::sent("hello 界"));
     app.outbox.push(OutgoingMessage {
@@ -136,15 +135,13 @@ fn socket_traffic_covers_registration_retries_receipts_and_goodbye() {
     assert_eq!(app.people[0].messages.len(), 2);
     assert_eq!(app.people[0].messages[1], Message::received("You: hello"));
 
-    // A silent relay changes the status, but keeps conversations and drafts.
-    app.people[0].draft = String::from("keep this");
+    // A silent relay changes the status; missing peers leave the people list.
     let later = retry_time + RELAY_SILENT_AFTER;
-    network.update_status(&mut app, later);
-    presence::mark_missing_people_offline(&mut app, later);
+    network.last_server_reply = Some(Instant::now() - RELAY_SILENT_AFTER);
+    network.update(&mut app);
+    presence::remove_missing_people(&mut app, later);
     assert_eq!(app.network_status, "Relay unavailable · retrying");
-    assert!(!app.people[0].online);
-    assert_eq!(app.people[0].draft, "keep this");
-    assert_eq!(app.people[0].messages.len(), 2);
+    assert!(app.people.is_empty());
     network.goodbye();
     let (goodbye, _) = read_packet(&server);
     assert_eq!(goodbye, format!("GOODBYE {}", network.id));
@@ -176,7 +173,7 @@ fn receipts_are_matched_and_repeated_messages_are_shown_once() {
     );
 
     network.handle_packet(&mut app, "bit-to-byte/1\ngoodbye\nbob\nBob", now);
-    assert!(!app.people[0].online);
+    assert!(app.people.is_empty());
 }
 
 #[test]

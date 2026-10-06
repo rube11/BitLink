@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::app::state::{App, Person};
 
-// Someone whose hello has not been repeated for this long is shown offline.
+// Remove someone whose hello has not been repeated for this long.
 pub const OFFLINE_AFTER: Duration = Duration::from_secs(8);
 
 const PROTOCOL_LINE: &str = "bit-to-byte/1";
@@ -32,10 +32,6 @@ pub fn is_valid_name(name: &str) -> bool {
         }
     }
     return true;
-}
-
-pub fn is_presence_packet(text: &str) -> bool {
-    return text.starts_with("bit-to-byte/1\n");
 }
 
 pub fn receive_packet(app: &mut App, text: &str, own_id: &str, now: Instant) {
@@ -67,33 +63,33 @@ pub fn receive_packet(app: &mut App, text: &str, own_id: &str, now: Instant) {
         return;
     }
 
-    let is_hello = packet_type == "hello";
+    if packet_type == "goodbye" {
+        if let Some(index) = app.people.iter().position(|person| person.id == person_id) {
+            app.remove_person(index);
+        }
+        return;
+    }
 
     match app.find_person(person_id) {
         Some(person) => {
-            person.online = is_hello;
             person.last_seen = now;
         }
         None => {
-            // A goodbye from someone we never saw should not create a conversation.
-            if is_hello {
-                app.people.push(Person {
-                    id: String::from(person_id),
-                    name: String::from(name),
-                    online: true,
-                    last_seen: now,
-                    messages: Vec::new(),
-                    draft: String::new(),
-                });
-            }
+            app.people.push(Person {
+                id: String::from(person_id),
+                name: String::from(name),
+                last_seen: now,
+                messages: Vec::new(),
+                draft: String::new(),
+            });
         }
     }
 }
 
-pub fn mark_missing_people_offline(app: &mut App, now: Instant) {
-    for person in &mut app.people {
-        if now.duration_since(person.last_seen) >= OFFLINE_AFTER {
-            person.online = false;
+pub fn remove_missing_people(app: &mut App, now: Instant) {
+    for index in (0..app.people.len()).rev() {
+        if now.duration_since(app.people[index].last_seen) >= OFFLINE_AFTER {
+            app.remove_person(index);
         }
     }
 }

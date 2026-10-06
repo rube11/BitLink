@@ -102,7 +102,7 @@ fn handle_typing(app: &mut App, key: KeyCode) {
         KeyCode::Enter => {
             let message = person.draft.trim();
             if !message.is_empty() {
-                if !person.online || app.outbox.len() >= MAX_PENDING_MESSAGES {
+                if app.outbox.len() >= MAX_PENDING_MESSAGES {
                     return;
                 }
                 app.outbox.push(OutgoingMessage {
