@@ -1,5 +1,12 @@
-// Encrypted chat and receipts use the relay; retries reuse their ciphertext.
+// One UDP socket handles relay discovery, encrypted direct traffic, and fallback.
+// REGISTER refreshes presence; DISCOVER introduces both observed endpoints.
+// Chat and receipts share an ENC1 payload carried in RELAY or FROM envelopes.
+// Retries reuse the ciphertext and token so delivery can switch paths safely.
 
+mod direct;
+
+use direct::{DIRECT_SILENT_AFTER, DISCOVER_EVERY, DirectPeer, MAX_PEERS};
+use std::collections::BTreeMap;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -15,6 +22,7 @@ pub const DEFAULT_SERVER: &str = "32.189.170.75:47002";
 const REGISTER_EVERY: Duration = Duration::from_secs(2);
 const RELAY_SILENT_AFTER: Duration = Duration::from_secs(8);
 const RESEND_EVERY: Duration = Duration::from_millis(500);
+const DIRECT_RETRY_FOR: Duration = Duration::from_secs(2);
 const GIVE_UP_AFTER: Duration = Duration::from_secs(10);
 const REMEMBER_RECEIVED_FOR: Duration = Duration::from_secs(60);
 const MAX_PACKETS_PER_UPDATE: usize = 256;
@@ -48,6 +56,7 @@ pub struct Network {
     last_server_reply: Option<Instant>,
     registration_error: Option<&'static str>,
     next_token_number: u64,
+    direct: BTreeMap<String, DirectPeer>,
     pending: Vec<PendingMessage>,
     received: Vec<ReceivedMessage>,
 }
@@ -101,6 +110,7 @@ impl Network {
             last_server_reply: None,
             registration_error: None,
             next_token_number: 0,
+            direct: BTreeMap::new(),
             pending: Vec::new(),
             received: Vec::new(),
         });
@@ -121,8 +131,28 @@ impl Network {
             None if connected => "Relay connected",
             None => "Relay unavailable · retrying",
         });
+        // Keep verified direct peers listed through a relay outage.
+        for person in &mut app.people {
+            if self.direct_address(&person.id, now).is_some() {
+                person.last_seen = now;
+            }
+        }
         presence::remove_missing_people(app, now);
-        self.sync_peers(app);
+        self.sync_peers(app, now);
+        for person in &app.people {
+            let peer = match self.direct.get_mut(&person.id) {
+                Some(peer) => peer,
+                None => continue,
+            };
+            let probe = peer.probe(now);
+            if now >= peer.next_discovery {
+                peer.next_discovery = now + DISCOVER_EVERY;
+                self.send(&format!("DISCOVER {}", person.id));
+            }
+            if let Some((address, token)) = probe {
+                self.send_direct_control(&person.id, address, &token, "PUNCH");
+            }
+        }
         self.queue_outgoing_messages(app, now);
         self.resend_pending_messages(app, now);
         self.received
@@ -154,31 +184,71 @@ impl Network {
                 Ok(text) => text,
                 Err(_) => continue,
             };
-            if source == self.server {
-                self.handle_packet(app, text, now);
-            }
+            let direct_source = if source == self.server {
+                None
+            } else {
+                Some(source)
+            };
+            self.handle_packet(app, text, direct_source, now);
         }
     }
 
-    fn handle_packet(&mut self, app: &mut App, text: &str, now: Instant) {
-        if text.starts_with("REGISTERED ") {
-            self.last_server_reply = Some(now);
-            self.registration_error = None;
-            return;
-        }
-        if text == "ERROR address-in-use" || text == "ERROR id-in-use" {
-            self.last_server_reply = None;
-            self.registration_error = Some(if text == "ERROR address-in-use" {
-                "Reconnect blocked · retrying"
-            } else {
-                "Session ID in use · retrying"
-            });
-            return;
-        }
-        if text.starts_with("bit-to-byte/1\n") {
-            presence::receive_packet(app, text, &self.id, now);
-            self.sync_peers(app);
-            return;
+    fn handle_packet(
+        &mut self,
+        app: &mut App,
+        text: &str,
+        direct_source: Option<SocketAddr>,
+        now: Instant,
+    ) {
+        // Only the configured relay can provide registration and introductions.
+        if direct_source.is_none() {
+            if text.starts_with("REGISTERED ") {
+                self.last_server_reply = Some(now);
+                self.registration_error = None;
+                return;
+            }
+            if text == "ERROR address-in-use" || text == "ERROR id-in-use" {
+                self.last_server_reply = None;
+                self.registration_error = Some(if text == "ERROR address-in-use" {
+                    "Reconnect blocked · retrying"
+                } else {
+                    "Session ID in use · retrying"
+                });
+                return;
+            }
+            if text.starts_with("bit-to-byte/1\n") {
+                presence::receive_packet(app, text, &self.id, now);
+                self.sync_peers(app, now);
+                return;
+            }
+            if text.starts_with("PEER ") {
+                let mut fields = text.splitn(4, ' ');
+                let (id, address, name) =
+                    match (fields.next(), fields.next(), fields.next(), fields.next()) {
+                        (Some("PEER"), Some(id), Some(address), Some(name)) => (id, address, name),
+                        _ => return,
+                    };
+                let address: SocketAddr = match address.parse() {
+                    Ok(address) => address,
+                    Err(_) => return,
+                };
+                if address == self.server || id == self.id || !presence::is_valid_name(name) {
+                    return;
+                }
+                // The introduction includes presence so UDP reordering cannot make us
+                // discard an endpoint whose separate hello packet has not arrived yet.
+                presence::receive_packet(
+                    app,
+                    &format!("bit-to-byte/1\nhello\n{}\n{}", id, name),
+                    &self.id,
+                    now,
+                );
+                self.sync_peers(app, now);
+                if let Some(peer) = self.direct.get_mut(id) {
+                    peer.introduce(address, now);
+                }
+                return;
+            }
         }
         // Only encrypted chat packets are accepted. Never fall back to plaintext.
         let mut words = text.splitn(4, ' ');
@@ -187,6 +257,14 @@ impl Network {
             (Some("FROM"), Some(sender), Some("ENC1"), Some(encrypted)) => (sender, encrypted),
             _ => return,
         };
+        if let Some(source) = direct_source
+            && self
+                .direct
+                .get(sender_id)
+                .is_none_or(|peer| peer.address != Some(source))
+        {
+            return;
+        }
         let plaintext = match crypto::decrypt(&self.key, sender_id, &self.id, encrypted) {
             Ok(plaintext) => plaintext,
             Err(_) => return,
@@ -200,8 +278,22 @@ impl Network {
         };
         let body = fields.next().unwrap_or("");
 
-        match (kind, body) {
-            ("RECEIPT", "") => {
+        // Relay traffic cannot establish or refresh a direct route.
+        match (kind, body, direct_source) {
+            ("PUNCH", "", Some(source)) => {
+                self.send_direct_control(sender_id, source, token, "PUNCH_ACK");
+            }
+            ("PUNCH_ACK", "", Some(_)) => {
+                let peer = match self.direct.get_mut(sender_id) {
+                    Some(peer) => peer,
+                    None => return,
+                };
+                if peer.challenge.as_deref() == Some(token) {
+                    peer.challenge = None;
+                    peer.verified_at = Some(now);
+                }
+            }
+            ("RECEIPT", "", _) => {
                 if let Some(index) = self.pending.iter().position(|message| {
                     message.outgoing.person_id == sender_id && message.token == token
                 }) {
@@ -209,8 +301,8 @@ impl Network {
                     mark_delivery(app, &confirmed.outgoing, Delivery::Delivered);
                 }
             }
-            ("CHAT", _) => {
-                self.handle_chat(app, sender_id, token, body, now);
+            ("CHAT", _, _) => {
+                self.handle_chat(app, sender_id, token, body, direct_source.is_some(), now);
             }
             _ => {}
         }
@@ -222,6 +314,7 @@ impl Network {
         sender_id: &str,
         token: &str,
         text: &str,
+        prefer_direct: bool,
         now: Instant,
     ) {
         if text.is_empty()
@@ -254,7 +347,7 @@ impl Network {
         }
         // Send a receipt even for a repeat, because the first one may have been lost.
         if let Ok(packet) = self.encrypted_payload(sender_id, &format!("{} RECEIPT", token)) {
-            self.send(&format!("RELAY {} {}", sender_id, packet));
+            self.send_to_peer(sender_id, &packet, now, prefer_direct);
         }
     }
 
@@ -297,10 +390,12 @@ impl Network {
             if now >= self.pending[index].next_send {
                 // Retry the exact encrypted packet, including its original nonce.
                 let pending = &self.pending[index];
-                self.send(&format!(
-                    "RELAY {} {}",
-                    pending.outgoing.person_id, pending.encrypted_payload
-                ));
+                self.send_to_peer(
+                    &pending.outgoing.person_id,
+                    &pending.encrypted_payload,
+                    now,
+                    waited < DIRECT_RETRY_FOR,
+                );
                 self.pending[index].next_send = now + RESEND_EVERY;
             }
             index += 1;
@@ -321,12 +416,65 @@ impl Network {
         return Ok(format!("ENC1 {}", encrypted));
     }
 
-    fn sync_peers(&mut self, app: &App) {
+    fn sync_peers(&mut self, app: &App, now: Instant) {
         self.pending.retain(|message| {
             app.people
                 .iter()
                 .any(|person| person.id == message.outgoing.person_id)
         });
+        self.direct
+            .retain(|id, _peer| app.people.iter().any(|person| person.id == *id));
+        for person in &app.people {
+            if self.direct.len() < MAX_PEERS && !self.direct.contains_key(&person.id) {
+                self.direct.insert(
+                    person.id.clone(),
+                    DirectPeer {
+                        address: None,
+                        next_discovery: now,
+                        next_probe: now,
+                        challenge: None,
+                        verified_at: None,
+                    },
+                );
+            }
+        }
+    }
+
+    fn direct_address(&self, id: &str, now: Instant) -> Option<SocketAddr> {
+        let Some(peer) = self.direct.get(id) else {
+            return None;
+        };
+        if peer
+            .verified_at
+            .is_some_and(|verified| now.duration_since(verified) < DIRECT_SILENT_AFTER)
+        {
+            return peer.address;
+        }
+        return None;
+    }
+
+    fn send_direct_control(&self, recipient: &str, address: SocketAddr, token: &str, kind: &str) {
+        if let Ok(packet) = self.encrypted_payload(recipient, &format!("{} {}", token, kind)) {
+            let packet = format!("FROM {} {}", self.id, packet);
+            let _result = self.socket.send_to(packet.as_bytes(), address);
+        }
+    }
+
+    fn send_to_peer(&self, recipient: &str, packet: &str, now: Instant, prefer_direct: bool) {
+        if prefer_direct && let Some(address) = self.direct_address(recipient, now) {
+            let direct_packet = format!("FROM {} {}", self.id, packet);
+            if self
+                .socket
+                .send_to(direct_packet.as_bytes(), address)
+                .is_ok()
+            {
+                return;
+            }
+        }
+        // Unconfirmed direct messages switch to the relay after two seconds,
+        // even if probes still succeed. The ciphertext and delivery token stay
+        // unchanged, so switching paths does not duplicate displayed messages.
+        self.send(&format!("RELAY {} {}", recipient, packet));
     }
 
     fn send(&self, packet: &str) {

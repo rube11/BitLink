@@ -130,6 +130,7 @@ fn socket_traffic_covers_registration_retries_receipts_and_goodbye() {
     network.update(&mut app, Instant::now());
     assert_eq!(app.network_status, "Relay connected");
     assert_eq!(app.people.len(), 1);
+    assert_eq!(read_packet(&server).0, "DISCOVER bob");
 
     app.people[0].messages.push(Message::sent("hello 界"));
     app.outbox.push(OutgoingMessage {
@@ -202,11 +203,11 @@ fn receipts_are_matched_and_repeated_messages_are_shown_once() {
     let mut app = App::new();
     let now = Instant::now();
 
-    network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", now);
+    network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", None, now);
     let packet = incoming(&network, "bob", "test CHAT hello");
-    network.handle_packet(&mut app, &packet, now);
+    network.handle_packet(&mut app, &packet, None, now);
     let packet = incoming(&network, "bob", "test CHAT hello");
-    network.handle_packet(&mut app, &packet, now);
+    network.handle_packet(&mut app, &packet, None, now);
     assert_eq!(app.people[0].messages, vec![Message::received("hello")]);
 
     app.people[0].messages.push(Message::sent("reply"));
@@ -214,19 +215,19 @@ fn receipts_are_matched_and_repeated_messages_are_shown_once() {
         .pending
         .push(pending_message("bob", "reply", 1, "expected", now));
     let packet = incoming(&network, "bob", "wrong RECEIPT");
-    network.handle_packet(&mut app, &packet, now);
+    network.handle_packet(&mut app, &packet, None, now);
     let packet = incoming(&network, "stranger", "expected RECEIPT");
-    network.handle_packet(&mut app, &packet, now);
+    network.handle_packet(&mut app, &packet, None, now);
     assert_eq!(network.pending.len(), 1);
     let packet = incoming(&network, "bob", "expected RECEIPT");
-    network.handle_packet(&mut app, &packet, now);
+    network.handle_packet(&mut app, &packet, None, now);
     assert!(network.pending.is_empty());
     assert_eq!(
         app.people[0].messages[1].delivery,
         Some(Delivery::Delivered)
     );
 
-    network.handle_packet(&mut app, "bit-to-byte/1\ngoodbye\nbob\nBob", now);
+    network.handle_packet(&mut app, "bit-to-byte/1\ngoodbye\nbob\nBob", None, now);
     assert!(app.people.is_empty());
 }
 
@@ -251,7 +252,7 @@ fn other_sources_are_ignored_and_unanswered_messages_become_unconfirmed() {
     assert!(app.people.is_empty());
 
     let now = Instant::now();
-    network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", now);
+    network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", None, now);
     app.people[0].messages.push(Message::sent("hello"));
     let long_ago = now - GIVE_UP_AFTER - Duration::from_secs(1);
     network
@@ -270,16 +271,16 @@ fn plaintext_and_wrong_key_packets_cannot_deliver_chat_or_confirm_messages() {
     let (server, mut network) = test_network();
     let mut app = App::new();
     let now = Instant::now();
-    network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", now);
+    network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", None, now);
     app.people[0].messages.push(Message::sent("reply"));
     network
         .pending
         .push(pending_message("bob", "reply", 0, "expected", now));
 
     for payload in ["test CHAT hello", "expected RECEIPT"] {
-        network.handle_packet(&mut app, &format!("FROM bob {}", payload), now);
+        network.handle_packet(&mut app, &format!("FROM bob {}", payload), None, now);
         let encrypted = crypto::encrypt(&[8_u8; 32], "bob", &network.id, payload).expect("encrypt");
-        network.handle_packet(&mut app, &format!("FROM bob ENC1 {}", encrypted), now);
+        network.handle_packet(&mut app, &format!("FROM bob ENC1 {}", encrypted), None, now);
     }
     assert_eq!(app.people[0].messages, vec![Message::sent("reply")]);
     assert_eq!(network.pending.len(), 1);
