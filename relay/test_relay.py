@@ -56,6 +56,10 @@ def main():
             expect(alice, server_address, f"REGISTERED {alice_address}")
             expect(alice, server_address, "bit-to-byte/1\nhello\nbob\nBob Smith")
 
+            send(alice, server_address, "DISCOVER bob")
+            expect(alice, server_address, f"PEER bob {bob_address} Bob Smith")
+            expect(bob, server_address, f"PEER alice {alice_address} Alice")
+
             # The server forwards repeats; the receiving app deduplicates them.
             message = "😀" * 500
             for _repeat in range(2):
@@ -65,6 +69,7 @@ def main():
                 expect(alice, server_address, "FROM bob test-1 RECEIPT")
 
             send(outsider, server_address, "RELAY bob forged CHAT ignore this")
+            send(outsider, server_address, "DISCOVER bob")
             bob.settimeout(0.2)
             try:
                 bob.recvfrom(4096)
@@ -76,7 +81,7 @@ def main():
             expect(alice, server_address, "bit-to-byte/1\ngoodbye\nbob\nBob Smith")
             send(alice, server_address, "RELAY bob test-2 CHAT after goodbye")
             expect(alice, server_address, "ERROR peer-unavailable")
-            print("PASS: named presence, Unicode chat, receipts, source checks, goodbye")
+            print("PASS: named presence, peer discovery, Unicode chat, receipts, source checks, goodbye")
     finally:
         server.terminate()
         server.wait(timeout=5)

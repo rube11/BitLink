@@ -16,7 +16,7 @@ fn registration_lists_recent_people_and_goodbye_removes_them() {
     let alice = address(11001);
     let bob = address(11002);
     let now = Instant::now();
-    let mut server = Server::new();
+    let mut server = Server::default();
 
     server.handle("REGISTER alice Alice", alice, now);
     let replies = server.handle("REGISTER bob Bob Smith", bob, now);
@@ -42,7 +42,7 @@ fn routing_uses_only_live_registrations_and_the_observed_sender() {
     let bob = address(10002);
     let outsider = address(10003);
     let now = Instant::now();
-    let mut server = Server::new();
+    let mut server = Server::default();
     server.handle("REGISTER alice Alice", alice, now);
     server.handle("REGISTER bob Bob", bob, now);
 
@@ -62,10 +62,6 @@ fn routing_uses_only_live_registrations_and_the_observed_sender() {
     assert_eq!(
         server.handle("REGISTER alice Alice", outsider, now),
         vec![reply(outsider, "ERROR id-in-use")]
-    );
-    assert_eq!(
-        server.handle("REGISTER alias Alias", alice, now),
-        vec![reply(alice, "ERROR address-in-use")]
     );
 
     let later = now + REGISTRATION_LIFETIME;
@@ -87,7 +83,7 @@ fn malformed_packets_do_not_change_members_or_forward_messages() {
     let alice = address(12001);
     let bob = address(12002);
     let now = Instant::now();
-    let mut server = Server::new();
+    let mut server = Server::default();
 
     for packet in [
         "",
@@ -122,7 +118,7 @@ fn malformed_packets_do_not_change_members_or_forward_messages() {
 #[test]
 fn a_full_server_still_refreshes_existing_members() {
     let now = Instant::now();
-    let mut server = Server::new();
+    let mut server = Server::default();
     for number in 0..MAX_MEMBERS {
         let packet = format!("REGISTER person-{} Person {}", number, number);
         server.handle(&packet, address(20000 + number as u16), now);
@@ -139,4 +135,67 @@ fn a_full_server_still_refreshes_existing_members() {
             .is_empty()
     );
     assert_eq!(server.members.len(), MAX_MEMBERS);
+}
+
+#[test]
+fn discovery_introduces_both_observed_endpoints_and_requires_fresh_registrations() {
+    let alice = address(11001);
+    let bob = address(11002);
+    let outsider = address(11003);
+    let now = Instant::now();
+    let mut server = Server::default();
+    server.handle("REGISTER alice Alice", alice, now);
+    server.handle("REGISTER bob Bob Smith", bob, now);
+    assert_eq!(
+        server.handle("DISCOVER bob", alice, now),
+        vec![
+            reply(alice, &format!("PEER bob {} Bob Smith", bob)),
+            reply(bob, &format!("PEER alice {} Alice", alice)),
+        ]
+    );
+    for packet in [
+        "DISCOVER alice",
+        "DISCOVER missing",
+        "DISCOVER bob forged-address",
+    ] {
+        assert!(server.handle(packet, alice, now).is_empty());
+    }
+    assert!(server.handle("DISCOVER bob", outsider, now).is_empty());
+    let stale = now + PRESENCE_LIFETIME;
+    server.handle("REGISTER alice Alice", alice, stale);
+    assert!(server.handle("DISCOVER bob", alice, stale).is_empty());
+    server.handle("REGISTER bob Bob", bob, stale);
+    assert!(!server.handle("DISCOVER bob", alice, stale).is_empty());
+    let later = stale + PRESENCE_LIFETIME;
+    server.handle("REGISTER bob Bob", bob, later);
+    assert!(server.handle("DISCOVER bob", alice, later).is_empty());
+    assert!(
+        server
+            .handle("DISCOVER bob", alice, later + REGISTRATION_LIFETIME)
+            .is_empty()
+    );
+}
+
+#[test]
+fn reconnecting_from_the_same_endpoint_replaces_the_old_session() {
+    let alice = address(13001);
+    let bob = address(13002);
+    let now = Instant::now();
+    let mut server = Server::default();
+    server.handle("REGISTER alice-old Alice", alice, now);
+    server.handle("REGISTER bob Bob", bob, now);
+
+    // A crash or lost goodbye can leave the endpoint registered to the old run.
+    let replies = server.handle(
+        "REGISTER alice-new Alice",
+        alice,
+        now + Duration::from_secs(1),
+    );
+    assert!(replies.contains(&reply(alice, &format!("REGISTERED {}", alice))));
+    assert!(replies.contains(&reply(bob, "bit-to-byte/1\ngoodbye\nalice-old\nAlice")));
+    assert_eq!(server.member_index("alice-old"), None);
+    assert_eq!(
+        server.handle("RELAY alice-new hello", bob, now + Duration::from_secs(1)),
+        vec![reply(alice, "FROM bob hello")]
+    );
 }

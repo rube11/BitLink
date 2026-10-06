@@ -1,4 +1,4 @@
-// Keep a list of registered people and forward packets between them.
+// Register people, introduce their observed endpoints, and forward fallback traffic.
 // Messages, receipts, retries, and conversations belong to the clients.
 
 use std::io;
@@ -23,53 +23,44 @@ struct Reply {
     text: String,
 }
 
+#[derive(Default)]
 struct Server {
     members: Vec<Member>,
 }
 
 impl Server {
-    fn new() -> Server {
-        return Server {
-            members: Vec::new(),
-        };
-    }
-
     fn handle(&mut self, text: &str, source: SocketAddr, now: Instant) -> Vec<Reply> {
-        self.remove_expired_members(now);
+        self.members.retain(|member| {
+            return now.duration_since(member.last_seen) < REGISTRATION_LIFETIME;
+        });
 
         // Keep spaces in display names and message bodies.
-        let mut words = Vec::new();
-        for word in text.splitn(3, ' ') {
-            words.push(word);
-        }
-        if words.len() < 2 {
+        let mut words = text.splitn(3, ' ');
+        let (command, person_id) = match (words.next(), words.next()) {
+            (Some(command), Some(id)) => (command, id),
+            _ => return Vec::new(),
+        };
+        if person_id.is_empty()
+            || person_id.len() > 40
+            || !person_id.bytes().all(|byte| {
+                return byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
+            })
+        {
             return Vec::new();
         }
-        let command = words[0];
-        let person_id = words[1];
-        let mut body = "";
-        if words.len() == 3 {
-            body = words[2];
-        }
-        if !valid_id(person_id) {
-            return Vec::new();
-        }
-
+        let body = words.next().unwrap_or("");
         match command {
             "REGISTER" => return self.register(person_id, body, source, now),
             "RELAY" => return self.relay(person_id, body, source),
-            "GOODBYE" => {
-                if body.is_empty() {
-                    return self.goodbye(person_id, source);
-                }
-            }
-            _ => {}
+            "DISCOVER" if body.is_empty() => return self.discover(person_id, source, now),
+            "GOODBYE" if body.is_empty() => return self.goodbye(person_id, source),
+            _ => return Vec::new(),
         }
-        return Vec::new();
     }
 
     fn register(&mut self, id: &str, name: &str, source: SocketAddr, now: Instant) -> Vec<Reply> {
-        if !valid_name(name) {
+        if name.trim().is_empty() || name.chars().count() > 40 || name.chars().any(char::is_control)
+        {
             return Vec::new();
         }
         let mut replies = Vec::new();
@@ -82,13 +73,16 @@ impl Server {
                 });
                 return replies;
             }
-            if member.address == source && member.id != id {
-                replies.push(Reply {
-                    address: source,
-                    text: String::from("ERROR address-in-use"),
-                });
-                return replies;
-            }
+        }
+        // A new run can reuse the previous run's endpoint after a lost goodbye.
+        // Traffic from that endpoint replaces its old session, not another address's ID.
+        if let Some(index) = self
+            .members
+            .iter()
+            .position(|member| member.address == source && member.id != id)
+        {
+            let old_id = self.members[index].id.clone();
+            replies.extend(self.goodbye(&old_id, source));
         }
 
         match self.member_index(id) {
@@ -184,6 +178,41 @@ impl Server {
         return replies;
     }
 
+    fn discover(&self, recipient_id: &str, source: SocketAddr, now: Instant) -> Vec<Reply> {
+        // Introduce only registered, recently active clients. Never accept an
+        // address from the request: both endpoints come from observed traffic.
+        let mut sender = None;
+        let mut recipient = None;
+        for member in &self.members {
+            if now.duration_since(member.last_seen) >= PRESENCE_LIFETIME {
+                continue;
+            }
+            if member.address == source {
+                sender = Some(member);
+            }
+            if member.id == recipient_id {
+                recipient = Some(member);
+            }
+        }
+        let (sender, recipient) = match (sender, recipient) {
+            (Some(sender), Some(recipient)) if sender.id != recipient.id => (sender, recipient),
+            _ => return Vec::new(),
+        };
+        return vec![
+            Reply {
+                address: sender.address,
+                text: format!(
+                    "PEER {} {} {}",
+                    recipient.id, recipient.address, recipient.name
+                ),
+            },
+            Reply {
+                address: recipient.address,
+                text: format!("PEER {} {} {}", sender.id, sender.address, sender.name),
+            },
+        ];
+    }
+
     fn member_index(&self, id: &str) -> Option<usize> {
         let mut index = 0;
         while index < self.members.len() {
@@ -194,41 +223,6 @@ impl Server {
         }
         return None;
     }
-
-    fn remove_expired_members(&mut self, now: Instant) {
-        let mut index = 0;
-        while index < self.members.len() {
-            if now.duration_since(self.members[index].last_seen) >= REGISTRATION_LIFETIME {
-                self.members.remove(index);
-            } else {
-                index += 1;
-            }
-        }
-    }
-}
-
-fn valid_id(id: &str) -> bool {
-    if id.is_empty() || id.len() > 40 {
-        return false;
-    }
-    for byte in id.bytes() {
-        if !byte.is_ascii_alphanumeric() && byte != b'-' && byte != b'_' {
-            return false;
-        }
-    }
-    return true;
-}
-
-fn valid_name(name: &str) -> bool {
-    if name.trim().is_empty() || name.chars().count() > 40 {
-        return false;
-    }
-    for character in name.chars() {
-        if character.is_control() {
-            return false;
-        }
-    }
-    return true;
 }
 
 fn main() -> io::Result<()> {
@@ -242,7 +236,7 @@ fn main() -> io::Result<()> {
     };
     println!("Presence and chat relay listening on {}", address);
 
-    let mut server = Server::new();
+    let mut server = Server::default();
     let mut buffer = [0_u8; 4096];
     loop {
         let (count, source) = match socket.recv_from(&mut buffer) {
