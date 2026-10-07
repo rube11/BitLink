@@ -118,7 +118,11 @@ fn handle_typing(app: &mut App, key: KeyCode) {
                     person_id,
                     text: message.clone(),
                     message_index,
-                    global: app.selected_chat == 0,
+                    kind: if app.selected_chat == 0 {
+                        "GLOBAL"
+                    } else {
+                        "CHAT"
+                    },
                 });
             }
             if let Some(draft) = app.draft_mut() {

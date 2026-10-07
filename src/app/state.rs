@@ -78,7 +78,7 @@ pub struct OutgoingMessage {
     pub person_id: String,
     pub text: String,
     pub message_index: usize,
-    pub global: bool,
+    pub kind: &'static str,
 }
 
 pub struct App {
@@ -130,7 +130,7 @@ impl App {
     }
 
     pub fn message_mut(&mut self, outgoing: &OutgoingMessage) -> Option<&mut Message> {
-        if outgoing.global {
+        if outgoing.kind == "GLOBAL" {
             return self.global_messages.get_mut(outgoing.message_index);
         }
         return self
@@ -143,7 +143,7 @@ impl App {
         let Some(message) = self.message_mut(outgoing) else {
             return;
         };
-        if outgoing.global {
+        if outgoing.kind == "GLOBAL" {
             message.pending_receipts = message.pending_receipts.saturating_sub(1);
             if delivery == Delivery::Delivered
                 && (message.pending_receipts > 0 || message.delivery == Some(Delivery::Unconfirmed))

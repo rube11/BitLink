@@ -356,12 +356,7 @@ impl Network {
             }
             self.next_token_number += 1;
             let token = format!("{}-{}", self.id, self.next_token_number);
-            let payload = format!(
-                "{} {} {}",
-                token,
-                if outgoing.global { "GLOBAL" } else { "CHAT" },
-                outgoing.text
-            );
+            let payload = format!("{} {} {}", token, outgoing.kind, outgoing.text);
             let packet = match self.encrypted_payload(&outgoing.person_id, &payload) {
                 Ok(packet) => packet,
                 Err(_) => {
@@ -401,7 +396,8 @@ impl Network {
                     && let Some(message) = app.message_mut(&pending.outgoing)
                 {
                     message.route = Some(
-                        if pending.outgoing.global && message.route.is_some_and(|old| old != route)
+                        if pending.outgoing.kind == "GLOBAL"
+                            && message.route.is_some_and(|old| old != route)
                         {
                             "D/R"
                         } else {

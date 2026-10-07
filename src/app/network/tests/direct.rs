@@ -23,7 +23,7 @@ fn queue_chat(network: &mut Network, app: &mut App, recipient: &str, text: &str,
         person_id: recipient.to_string(),
         text: text.to_string(),
         message_index: index,
-        global: false,
+        kind: "CHAT",
     });
     network.queue_outgoing_messages(app, now);
     network.resend_pending_messages(app, now);

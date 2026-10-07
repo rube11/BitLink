@@ -43,7 +43,7 @@ fn pending_message(
             person_id: String::from(person_id),
             text: String::from(text),
             message_index: index,
-            global: false,
+            kind: "CHAT",
         },
         token: String::from(token),
         encrypted_payload: String::new(), // These fixtures only test receipts and timeouts.
@@ -141,7 +141,7 @@ fn socket_traffic_covers_registration_retries_receipts_and_goodbye() {
         person_id: String::from("bob"),
         text: String::from("hello 界"),
         message_index: 0,
-        global: false,
+        kind: "CHAT",
     });
     network.update(&mut app, Instant::now());
     let (first_send, _) = read_packet(&server);
