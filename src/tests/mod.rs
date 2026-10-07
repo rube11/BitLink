@@ -12,6 +12,7 @@ use crate::tui::{input, render};
 
 fn sample_app() -> App {
     let mut app = App::new();
+    app.selected_chat = 1;
     for name in ["Maya", "Alex", "Sam"] {
         app.people.push(Person {
             id: String::from(name),
@@ -24,7 +25,7 @@ fn sample_app() -> App {
     return app;
 }
 
-fn press(app: &mut App, code: KeyCode) {
+pub(crate) fn press(app: &mut App, code: KeyCode) {
     let key = KeyEvent::new(code, KeyModifiers::NONE);
     input::handle_event(app, Event::Key(key));
 }

@@ -13,13 +13,10 @@ pub fn handle_event(app: &mut App, event: Event) {
             handle_key(app, key);
         }
         Event::Paste(text) => {
-            if app.typing {
-                match app.people.get_mut(app.selected_person) {
-                    Some(person) => {
-                        append_text(&mut person.draft, &text);
-                    }
-                    None => {}
-                }
+            if app.typing
+                && let Some(draft) = app.draft_mut()
+            {
+                append_text(draft, &text);
             }
         }
         _ => {} // Resize events cause a redraw on the next loop iteration.
@@ -52,26 +49,22 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('q') => {
             app.running = false;
         }
-        KeyCode::Tab => match app.view {
-            View::Messages => {
-                app.view = View::Files;
-            }
-            View::Files => {
-                app.view = View::Messages;
-            }
-        },
-        KeyCode::Char('k') => {
-            if app.view == View::Messages && app.selected_person > 0 {
-                app.selected_person -= 1;
+        KeyCode::Tab => {
+            app.view = match app.view {
+                View::Messages => View::Files,
+                View::Files => View::Messages,
             }
         }
-        KeyCode::Char('j') => {
-            if app.view == View::Messages && app.selected_person + 1 < app.people.len() {
-                app.selected_person += 1;
-            }
+        KeyCode::Char('k') if app.view == View::Messages => {
+            app.selected_chat = app.selected_chat.saturating_sub(1);
+        }
+        KeyCode::Char('j')
+            if app.view == View::Messages && app.selected_chat < app.people.len() =>
+        {
+            app.selected_chat += 1;
         }
         KeyCode::Char('i') => {
-            if app.view == View::Messages && app.people.get(app.selected_person).is_some() {
+            if app.view == View::Messages && !app.people.is_empty() {
                 app.typing = true;
             }
         }
@@ -85,31 +78,51 @@ fn handle_typing(app: &mut App, key: KeyCode) {
         return;
     }
 
-    let person = match app.people.get_mut(app.selected_person) {
-        Some(person) => person,
-        None => return,
+    let Some(draft) = app.draft_mut() else {
+        return;
     };
 
     match key {
         KeyCode::Char(character) => {
-            append_text(&mut person.draft, &character.to_string());
+            append_text(draft, &character.to_string());
         }
         KeyCode::Backspace => {
-            person.draft.pop();
+            draft.pop();
         }
         KeyCode::Enter => {
-            let message = person.draft.trim();
-            if !message.is_empty() {
-                if app.outbox.len() >= MAX_PENDING_MESSAGES {
-                    return;
-                }
+            let message = draft.trim().to_string();
+            let recipients: Vec<String> = if app.selected_chat == 0 {
+                app.people.iter().map(|person| person.id.clone()).collect()
+            } else {
+                vec![app.people[app.selected_chat - 1].id.clone()]
+            };
+            if message.is_empty()
+                || recipients.is_empty()
+                || app.outbox.len() + recipients.len() > MAX_PENDING_MESSAGES
+            {
+                return;
+            }
+            let messages = if app.selected_chat == 0 {
+                &mut app.global_messages
+            } else {
+                &mut app.people[app.selected_chat - 1].messages
+            };
+            let message_index = messages.len();
+            let mut sent = Message::sent(&message);
+            if app.selected_chat == 0 {
+                sent.pending_receipts = recipients.len();
+            }
+            messages.push(sent);
+            for person_id in recipients {
                 app.outbox.push(OutgoingMessage {
-                    person_id: person.id.clone(),
-                    text: String::from(message),
-                    message_index: person.messages.len(),
+                    person_id,
+                    text: message.clone(),
+                    message_index,
+                    global: app.selected_chat == 0,
                 });
-                person.messages.push(Message::sent(message));
-                person.draft.clear();
+            }
+            if let Some(draft) = app.draft_mut() {
+                draft.clear();
             }
         }
         _ => {}

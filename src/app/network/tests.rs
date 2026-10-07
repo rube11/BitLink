@@ -1,6 +1,7 @@
 use super::*;
 
 mod direct;
+mod global;
 
 const TEST_KEY: [u8; 32] = [7_u8; 32];
 
@@ -42,6 +43,7 @@ fn pending_message(
             person_id: String::from(person_id),
             text: String::from(text),
             message_index: index,
+            global: false,
         },
         token: String::from(token),
         encrypted_payload: String::new(), // These fixtures only test receipts and timeouts.
@@ -139,6 +141,7 @@ fn socket_traffic_covers_registration_retries_receipts_and_goodbye() {
         person_id: String::from("bob"),
         text: String::from("hello 界"),
         message_index: 0,
+        global: false,
     });
     network.update(&mut app, Instant::now());
     let (first_send, _) = read_packet(&server);
@@ -279,13 +282,14 @@ fn plaintext_and_wrong_key_packets_cannot_deliver_chat_or_confirm_messages() {
         .pending
         .push(pending_message("bob", "reply", 0, "expected", now));
 
-    for payload in ["test CHAT hello", "expected RECEIPT"] {
+    for payload in ["test CHAT hello", "test GLOBAL hello", "expected RECEIPT"] {
         network.handle_packet(&mut app, &format!("FROM bob {}", payload), None, now);
         let encrypted = crypto::encrypt(&[8_u8; 32], "bob", &network.id, payload).expect("encrypt");
         network.handle_packet(&mut app, &format!("FROM bob ENC1 {}", encrypted), None, now);
     }
     assert_eq!(app.people[0].messages, vec![Message::sent("reply")]);
     assert_eq!(network.pending.len(), 1);
+    assert!(app.global_messages.is_empty());
     // Invalid chat must not produce a receipt.
     server.set_nonblocking(true).expect("nonblocking");
     let mut buffer = [0_u8; 4096];
@@ -306,6 +310,9 @@ fn largest_allowed_unicode_message_fits_the_existing_relay() {
         .expect("packet fits relay");
     let relay_payload = packet.as_str();
     assert!(relay_payload.len() <= 2100);
+    network
+        .encrypted_payload("bob", &format!("{token} GLOBAL {message}"))
+        .expect("global payload fits relay");
     let decrypted = crypto::decrypt(
         &TEST_KEY,
         &network.id,

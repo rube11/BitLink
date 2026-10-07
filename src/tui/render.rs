@@ -75,22 +75,28 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .split(area);
     let people = List::new(
-        app.people
-            .iter()
-            .map(|person| ListItem::new(person.name.as_str())),
+        std::iter::once(ListItem::new("global")).chain(
+            app.people
+                .iter()
+                .map(|person| ListItem::new(person.name.as_str())),
+        ),
     )
     .highlight_symbol("› ")
     .highlight_style(Style::default().fg(theme::ACCENT).bg(theme::SELECTION))
     .block(
         Block::default()
-            .title("people")
+            .title("chats")
             .title_style(Style::default().fg(theme::MUTED))
             .borders(Borders::RIGHT)
             .border_style(Style::default().fg(theme::BORDER)),
     );
-    let mut selection = ListState::default().with_selected(Some(app.selected_person));
+    let mut selection = ListState::default().with_selected(Some(app.selected_chat));
     frame.render_stateful_widget(people, columns[0], &mut selection);
-    let Some(person) = app.people.get(app.selected_person) else {
+    let (name, history, draft) = if app.selected_chat == 0 {
+        ("global", &app.global_messages, &app.global_draft)
+    } else if let Some(person) = app.people.get(app.selected_chat - 1) {
+        (person.name.as_str(), &person.messages, &person.draft)
+    } else {
         frame.render_widget(
             Paragraph::new("No one online").style(Style::default().fg(theme::MUTED)),
             columns[2],
@@ -105,13 +111,17 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .split(columns[2]);
     frame.render_widget(
-        Paragraph::new(person.name.as_str()).style(Style::default().add_modifier(Modifier::BOLD)),
+        Paragraph::new(name).style(Style::default().add_modifier(Modifier::BOLD)),
         rows[0],
     );
     let mut lines = Vec::new();
-    for message in &person.messages {
+    for message in history {
         let mut author = vec![Span::styled(
-            if message.from_me { "you" } else { &person.name },
+            if message.from_me {
+                "you"
+            } else {
+                message.author.as_deref().unwrap_or(name)
+            },
             Style::default().fg(if message.from_me {
                 theme::ACCENT
             } else {
@@ -160,14 +170,19 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
         })),
         input_columns[0],
     );
-    if person.draft.is_empty() && !app.typing {
+    if draft.is_empty() && !app.typing {
         frame.render_widget(
-            Paragraph::new("i to write").style(Style::default().fg(theme::MUTED)),
+            Paragraph::new(if app.people.is_empty() {
+                "No one online"
+            } else {
+                "i to write"
+            })
+            .style(Style::default().fg(theme::MUTED)),
             input_columns[1],
         );
         return;
     }
-    let text = Line::raw(&person.draft);
+    let text = Line::raw(draft);
     let text_width = u16::try_from(text.width()).unwrap_or(u16::MAX);
     // Leave room for the cursor and keep the end of long drafts visible.
     let scroll = text_width.saturating_sub(input_columns[1].width.saturating_sub(1));

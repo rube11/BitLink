@@ -45,7 +45,14 @@ fn changing_people_preserves_each_draft_and_message_recipient() {
     assert_eq!(app.people[0].messages.len(), 1);
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('k'));
-    assert_eq!(app.people[app.selected_person].draft, "a");
+    assert_eq!(app.people[app.selected_chat - 1].draft, "a");
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('i'));
+    input::handle_event(&mut app, Event::Paste("group draft".into()));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.people[0].draft, "a");
+    assert_eq!(app.global_draft, "group draft");
 }
 
 #[test]
@@ -56,7 +63,7 @@ fn removing_people_preserves_selection_and_stops_typing_when_the_recipient_leave
     press(&mut app, KeyCode::Char('a'));
     let now = std::time::Instant::now();
     receive_packet(&mut app, "bit-to-byte/1\ngoodbye\nMaya\nMaya", "self", now);
-    assert_eq!(app.selected_person, 0);
+    assert_eq!(app.selected_chat, 1);
     assert_eq!(app.people[0].id, "Alex");
     assert_eq!(app.people[0].draft, "a");
     assert!(app.typing);
@@ -64,13 +71,13 @@ fn removing_people_preserves_selection_and_stops_typing_when_the_recipient_leave
     assert_eq!(app.outbox.len(), 1);
     receive_packet(&mut app, "bit-to-byte/1\ngoodbye\nAlex\nAlex", "self", now);
     assert!(!app.typing);
-    assert_eq!(app.people[app.selected_person].id, "Sam");
+    assert_eq!(app.people[app.selected_chat - 1].id, "Sam");
     assert!(app.outbox.is_empty());
     press(&mut app, KeyCode::Char('x'));
     assert!(app.people[0].draft.is_empty());
     remove_missing_people(&mut app, now + OFFLINE_AFTER);
     assert!(app.people.is_empty());
-    assert_eq!(app.selected_person, 0);
+    assert_eq!(app.selected_chat, 0);
     assert!(draw_screen(&app, 80, 24).contains("No one online"));
 }
 
@@ -118,20 +125,20 @@ fn selection_handles_list_edges_and_an_empty_list() {
     for _step in 0..10 {
         press(&mut app, KeyCode::Char('j'));
     }
-    assert_eq!(app.selected_person, 2);
+    assert_eq!(app.selected_chat, 3);
     press(&mut app, KeyCode::Up);
-    assert_eq!(app.selected_person, 2);
+    assert_eq!(app.selected_chat, 3);
     for _step in 0..10 {
         press(&mut app, KeyCode::Char('k'));
     }
-    assert_eq!(app.selected_person, 0);
+    assert_eq!(app.selected_chat, 0);
     press(&mut app, KeyCode::Down);
-    assert_eq!(app.selected_person, 0);
+    assert_eq!(app.selected_chat, 0);
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.view, View::Files);
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('i'));
-    assert_eq!(app.selected_person, 0);
+    assert_eq!(app.selected_chat, 0);
     assert!(!app.typing);
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.view, View::Messages);

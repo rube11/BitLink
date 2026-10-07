@@ -55,7 +55,6 @@ pub fn run() -> io::Result<()> {
         Ok(network) => network,
         Err(error) => return Err(error),
     };
-    app.name = network.name.clone();
     let mut terminal = match terminal::start() {
         Ok(terminal) => terminal,
         Err(error) => return Err(error),

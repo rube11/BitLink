@@ -20,6 +20,7 @@ fn hellos_update_one_person_and_goodbye_removes_their_conversation() {
     assert_eq!(app.people[0].last_seen, now + Duration::from_secs(2));
     receive_packet(&mut app, "bit-to-byte/1\nhello\nbob-1\nBob", "self", now);
     app.view = View::Messages;
+    app.selected_chat = 1;
     assert!(draw_screen(&app, 80, 24).contains("Alice"));
 
     receive_packet(

@@ -298,56 +298,52 @@ impl Network {
                     message.outgoing.person_id == sender_id && message.token == token
                 }) {
                     let confirmed = self.pending.remove(index);
-                    mark_delivery(app, &confirmed.outgoing, Delivery::Delivered);
+                    app.finish_delivery(&confirmed.outgoing, Delivery::Delivered);
                 }
             }
-            ("CHAT", _, _) => {
-                self.handle_chat(app, sender_id, token, body, direct_source.is_some(), now);
+            ("CHAT" | "GLOBAL", _, _) => {
+                if body.is_empty()
+                    || body.len() > MAX_MESSAGE_BYTES
+                    || body.chars().count() > MAX_MESSAGE_CHARACTERS
+                    || body.chars().any(char::is_control)
+                {
+                    return;
+                }
+                // Only accept messages from people in our list.
+                let person = match app.find_person(sender_id) {
+                    Some(person) => person,
+                    None => return,
+                };
+
+                let already_received = self
+                    .received
+                    .iter()
+                    .any(|message| message.sender_id == sender_id && message.token == token);
+                if !already_received {
+                    if self.received.len() >= MAX_REMEMBERED_MESSAGES {
+                        return;
+                    }
+                    let mut message = Message::received(body);
+                    if kind == "GLOBAL" {
+                        message.author = Some(person.name.clone());
+                        app.global_messages.push(message);
+                    } else {
+                        person.messages.push(message);
+                    }
+                    self.received.push(ReceivedMessage {
+                        sender_id: String::from(sender_id),
+                        token: String::from(token),
+                        received_at: now,
+                    });
+                }
+                // Send a receipt even for a repeat, because the first one may have been lost.
+                if let Ok(packet) = self.encrypted_payload(sender_id, &format!("{} RECEIPT", token))
+                {
+                    let _route =
+                        self.send_to_peer(sender_id, &packet, now, direct_source.is_some());
+                }
             }
             _ => {}
-        }
-    }
-
-    fn handle_chat(
-        &mut self,
-        app: &mut App,
-        sender_id: &str,
-        token: &str,
-        text: &str,
-        prefer_direct: bool,
-        now: Instant,
-    ) {
-        if text.is_empty()
-            || text.len() > MAX_MESSAGE_BYTES
-            || text.chars().count() > MAX_MESSAGE_CHARACTERS
-            || text.chars().any(char::is_control)
-        {
-            return;
-        }
-        // Only accept messages from people in our list.
-        let person = match app.find_person(sender_id) {
-            Some(person) => person,
-            None => return,
-        };
-
-        let already_received = self
-            .received
-            .iter()
-            .any(|message| message.sender_id == sender_id && message.token == token);
-        if !already_received {
-            if self.received.len() >= MAX_REMEMBERED_MESSAGES {
-                return;
-            }
-            person.messages.push(Message::received(text));
-            self.received.push(ReceivedMessage {
-                sender_id: String::from(sender_id),
-                token: String::from(token),
-                received_at: now,
-            });
-        }
-        // Send a receipt even for a repeat, because the first one may have been lost.
-        if let Ok(packet) = self.encrypted_payload(sender_id, &format!("{} RECEIPT", token)) {
-            let _route = self.send_to_peer(sender_id, &packet, now, prefer_direct);
         }
     }
 
@@ -355,16 +351,21 @@ impl Network {
     fn queue_outgoing_messages(&mut self, app: &mut App, now: Instant) {
         for outgoing in std::mem::take(&mut app.outbox) {
             if self.pending.len() >= MAX_PENDING_MESSAGES {
-                mark_delivery(app, &outgoing, Delivery::Unconfirmed);
+                app.finish_delivery(&outgoing, Delivery::Unconfirmed);
                 continue;
             }
             self.next_token_number += 1;
             let token = format!("{}-{}", self.id, self.next_token_number);
-            let payload = format!("{} CHAT {}", token, outgoing.text);
+            let payload = format!(
+                "{} {} {}",
+                token,
+                if outgoing.global { "GLOBAL" } else { "CHAT" },
+                outgoing.text
+            );
             let packet = match self.encrypted_payload(&outgoing.person_id, &payload) {
                 Ok(packet) => packet,
                 Err(_) => {
-                    mark_delivery(app, &outgoing, Delivery::Unconfirmed);
+                    app.finish_delivery(&outgoing, Delivery::Unconfirmed);
                     continue;
                 }
             };
@@ -384,7 +385,7 @@ impl Network {
             let waited = now.duration_since(self.pending[index].first_sent);
             if waited >= GIVE_UP_AFTER {
                 let given_up = self.pending.remove(index);
-                mark_delivery(app, &given_up.outgoing, Delivery::Unconfirmed);
+                app.finish_delivery(&given_up.outgoing, Delivery::Unconfirmed);
                 continue;
             }
             if now >= self.pending[index].next_send {
@@ -396,10 +397,17 @@ impl Network {
                     now,
                     waited < DIRECT_RETRY_FOR,
                 );
-                if let Some(person) = app.find_person(&pending.outgoing.person_id)
-                    && let Some(message) = person.messages.get_mut(pending.outgoing.message_index)
+                if let Some(route) = route
+                    && let Some(message) = app.message_mut(&pending.outgoing)
                 {
-                    message.route = route.or(message.route);
+                    message.route = Some(
+                        if pending.outgoing.global && message.route.is_some_and(|old| old != route)
+                        {
+                            "D/R"
+                        } else {
+                            route
+                        },
+                    );
                 }
                 self.pending[index].next_send = now + RESEND_EVERY;
             }
@@ -421,11 +429,16 @@ impl Network {
         return Ok(format!("ENC1 {}", encrypted));
     }
 
-    fn sync_peers(&mut self, app: &App, now: Instant) {
+    fn sync_peers(&mut self, app: &mut App, now: Instant) {
         self.pending.retain(|message| {
-            app.people
+            let present = app
+                .people
                 .iter()
-                .any(|person| person.id == message.outgoing.person_id)
+                .any(|person| person.id == message.outgoing.person_id);
+            if !present {
+                app.finish_delivery(&message.outgoing, Delivery::Unconfirmed);
+            }
+            return present;
         });
         self.direct
             .retain(|id, _peer| app.people.iter().any(|person| person.id == *id));
@@ -493,17 +506,6 @@ impl Network {
     fn send(&self, packet: &str) -> bool {
         // A failed send is not fatal: registration and messages are repeated later.
         return self.socket.send_to(packet.as_bytes(), self.server).is_ok();
-    }
-}
-
-// Update the delivery label on the message the user sent.
-fn mark_delivery(app: &mut App, outgoing: &OutgoingMessage, delivery: Delivery) {
-    let person = match app.find_person(&outgoing.person_id) {
-        Some(person) => person,
-        None => return,
-    };
-    if let Some(message) = person.messages.get_mut(outgoing.message_index) {
-        message.delivery = Some(delivery);
     }
 }
 

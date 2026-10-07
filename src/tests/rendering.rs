@@ -58,6 +58,14 @@ fn delivery_labels_are_drawn_without_treating_message_text_as_metadata() {
     assert!(draw_screen(&app, 80, 24).contains("you [R]"));
     app.people[0].messages[1].delivery = Some(Delivery::Unconfirmed);
     assert!(draw_screen(&app, 80, 24).contains("you [R] ?"));
+    app.selected_chat = 0;
+    let mut received = Message::received("hello everyone");
+    received.author = Some("Bob Smith".into());
+    app.global_messages.push(received);
+    app.people.clear();
+    let global = draw_screen(&app, 80, 24);
+    assert!(global.contains("Bob Smith"));
+    assert!(global.contains("hello everyone"));
 }
 
 #[test]

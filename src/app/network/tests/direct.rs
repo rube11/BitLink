@@ -23,6 +23,7 @@ fn queue_chat(network: &mut Network, app: &mut App, recipient: &str, text: &str,
         person_id: recipient.to_string(),
         text: text.to_string(),
         message_index: index,
+        global: false,
     });
     network.queue_outgoing_messages(app, now);
     network.resend_pending_messages(app, now);
@@ -362,10 +363,10 @@ fn direct_peers_are_bounded_and_follow_online_presence() {
             now,
         );
     }
-    network.sync_peers(&app, now);
+    network.sync_peers(&mut app, now);
     assert_eq!(network.direct.len(), MAX_PEERS);
     app.remove_person(0);
-    network.sync_peers(&app, now);
+    network.sync_peers(&mut app, now);
     assert_eq!(network.direct.len(), MAX_PEERS);
     assert!(!network.direct.contains_key("peer-0"));
     assert!(network.direct.contains_key(&format!("peer-{}", MAX_PEERS)));
