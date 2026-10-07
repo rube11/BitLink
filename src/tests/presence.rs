@@ -20,7 +20,7 @@ fn hellos_update_one_person_and_goodbye_removes_their_conversation() {
     assert_eq!(app.people[0].last_seen, now + Duration::from_secs(2));
     receive_packet(&mut app, "bit-to-byte/1\nhello\nbob-1\nBob", "self", now);
     app.view = View::Messages;
-    assert!(draw_screen(&app, 80, 24).contains("[online]"));
+    assert!(draw_screen(&app, 80, 24).contains("Alice"));
 
     receive_packet(
         &mut app,
@@ -31,7 +31,7 @@ fn hellos_update_one_person_and_goodbye_removes_their_conversation() {
     assert_eq!(app.people.len(), 1);
     assert_eq!(app.people[0].id, "bob-1");
     let screen = draw_screen(&app, 80, 24);
-    assert!(screen.contains("[online]"));
+    assert!(screen.contains("Bob"));
     assert!(!screen.contains("Alice"));
     receive_packet(
         &mut app,

@@ -7,17 +7,32 @@ use super::{draw_screen, press, sample_app};
 #[test]
 fn screens_handle_resizing_and_only_messages_allow_typing() {
     let mut app = sample_app();
-    for _view in 0..3 {
-        for (width, height) in [(0, 0), (1, 1), (40, 10), (64, 16), (100, 28)] {
+    for _view in 0..2 {
+        for (width, height) in [(0, 0), (1, 1), (39, 9), (40, 10), (64, 16), (100, 28)] {
             draw_screen(&app, width, height);
         }
-        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('i'));
         assert_eq!(app.typing, app.view == View::Messages);
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Tab);
     }
-    assert!(draw_screen(&app, 80, 24).contains("Bit to Byte"));
-    assert!(draw_screen(&app, 40, 10).contains("Resize"));
+    app.network_status = String::from("Relay connected");
+    let screen = draw_screen(&app, 80, 24);
+    for removed in [
+        "Bit to Byte",
+        "Your club",
+        "NOTICE",
+        "[online]",
+        "Relay connected",
+        "You:",
+        "↑",
+        "↓",
+    ] {
+        assert!(!screen.contains(removed));
+    }
+    assert!(screen.contains("chat"));
+    assert!(screen.contains("files"));
+    assert!(draw_screen(&app, 39, 9).contains("Resize"));
     press(&mut app, KeyCode::Char('q'));
     assert!(!app.running);
 }
@@ -34,15 +49,15 @@ fn delivery_labels_are_drawn_without_treating_message_text_as_metadata() {
     assert!(screen.contains("You: still Maya"));
 
     app.people[0].messages.push(Message::sent("hello"));
-    assert!(draw_screen(&app, 80, 24).contains("[sending] hello"));
-    app.people[0].messages[1].route = Some("direct UDP");
-    assert!(draw_screen(&app, 80, 24).contains("[sending · direct UDP] hello"));
+    assert!(draw_screen(&app, 80, 24).contains("you …"));
+    app.people[0].messages[1].route = Some("D");
+    assert!(draw_screen(&app, 80, 24).contains("you [D] …"));
     app.people[0].messages[1].delivery = Some(Delivery::Delivered);
-    assert!(draw_screen(&app, 80, 24).contains("[delivered · direct UDP] hello"));
-    app.people[0].messages[1].route = Some("relay");
-    assert!(draw_screen(&app, 80, 24).contains("[delivered · relay] hello"));
+    assert!(draw_screen(&app, 80, 24).contains("you [D]"));
+    app.people[0].messages[1].route = Some("R");
+    assert!(draw_screen(&app, 80, 24).contains("you [R]"));
     app.people[0].messages[1].delivery = Some(Delivery::Unconfirmed);
-    assert!(draw_screen(&app, 80, 24).contains("[unconfirmed · relay] hello"));
+    assert!(draw_screen(&app, 80, 24).contains("you [R] ?"));
 }
 
 #[test]
@@ -59,4 +74,9 @@ fn newest_message_and_end_of_long_draft_stay_visible() {
     let screen = draw_screen(&app, 64, 16);
     assert!(screen.contains("Message 49"));
     assert!(screen.contains("END"));
+    app.typing = false;
+    app.people[0].draft.clear();
+    let last = app.people[0].messages.last_mut().unwrap();
+    last.text = format!("{}WRAPPED", "word ".repeat(30));
+    assert!(draw_screen(&app, 40, 10).contains("WRAPPED"));
 }

@@ -479,7 +479,7 @@ impl Network {
                 .send_to(direct_packet.as_bytes(), address)
                 .is_ok()
             {
-                return Some("direct UDP");
+                return Some("D");
             }
         }
         // Unconfirmed direct messages switch to the relay after two seconds,
@@ -487,7 +487,7 @@ impl Network {
         // unchanged, so switching paths does not duplicate displayed messages.
         return self
             .send(&format!("RELAY {} {}", recipient, packet))
-            .then_some("relay");
+            .then_some("R");
     }
 
     fn send(&self, packet: &str) -> bool {

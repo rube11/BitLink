@@ -53,27 +53,24 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             app.running = false;
         }
         KeyCode::Tab => match app.view {
-            View::Announcements => {
-                app.view = View::Messages;
-            }
             View::Messages => {
                 app.view = View::Files;
             }
             View::Files => {
-                app.view = View::Announcements;
+                app.view = View::Messages;
             }
         },
-        KeyCode::Up => {
+        KeyCode::Char('k') => {
             if app.view == View::Messages && app.selected_person > 0 {
                 app.selected_person -= 1;
             }
         }
-        KeyCode::Down => {
+        KeyCode::Char('j') => {
             if app.view == View::Messages && app.selected_person + 1 < app.people.len() {
                 app.selected_person += 1;
             }
         }
-        KeyCode::Enter => {
+        KeyCode::Char('i') => {
             if app.view == View::Messages && app.people.get(app.selected_person).is_some() {
                 app.typing = true;
             }

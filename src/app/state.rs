@@ -9,7 +9,6 @@ pub const MAX_PENDING_MESSAGES: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum View {
-    Announcements,
     Messages,
     Files,
 }
@@ -81,7 +80,6 @@ pub struct App {
     pub view: View,
     pub people: Vec<Person>,
     pub selected_person: usize,
-    pub announcements: Vec<String>,
 }
 
 impl App {
@@ -92,17 +90,9 @@ impl App {
             outbox: Vec::new(),
             running: true,
             typing: false,
-            view: View::Announcements,
+            view: View::Messages,
             people: Vec::new(),
             selected_person: 0,
-            announcements: vec![
-                String::from("Welcome to Bit to Byte."),
-                String::from("Open the app with internet access to join the people list."),
-                String::from("People disappear when they leave or their connection times out."),
-                String::from(
-                    "Chat uses a shared secret key. History lasts while a person is listed.",
-                ),
-            ],
         };
     }
 
