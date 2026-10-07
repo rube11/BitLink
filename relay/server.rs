@@ -1,6 +1,7 @@
-// Receive UDP packets; registration and routing live in protocol.rs.
+// Chat and sharing use isolated registrations on the same UDP relay.
 mod protocol;
-use protocol::Server;
+use protocol::Relay;
+
 #[cfg(test)]
 use protocol::*;
 #[cfg(test)]
@@ -18,7 +19,7 @@ fn main() -> io::Result<()> {
     };
     println!("Presence and chat relay listening on {}", address);
 
-    let mut server = Server::default();
+    let mut server = Relay::default();
     let mut buffer = [0_u8; 4096];
     loop {
         let (count, source) = match socket.recv_from(&mut buffer) {
@@ -32,13 +33,8 @@ fn main() -> io::Result<()> {
         if count == buffer.len() {
             continue;
         }
-        let text = match std::str::from_utf8(&buffer[..count]) {
-            Ok(text) => text,
-            Err(_) => continue,
-        };
-        let replies = server.handle(text, source, Instant::now());
-        for reply in replies {
-            match socket.send_to(reply.text.as_bytes(), reply.address) {
+        for (address, packet) in server.handle(&buffer[..count], source, Instant::now()) {
+            match socket.send_to(&packet, address) {
                 Ok(_) => {}
                 Err(error) => eprintln!("Send failed: {}", error),
             }

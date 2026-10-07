@@ -81,7 +81,35 @@ def main():
             expect(alice, server_address, "bit-to-byte/1\ngoodbye\nbob\nBob Smith")
             send(alice, server_address, "RELAY bob test-2 CHAT after goodbye")
             expect(alice, server_address, "ERROR peer-unavailable")
-            print("PASS: named presence, peer discovery, Unicode chat, receipts, source checks, goodbye")
+            with client() as host, client() as guest:
+                send(host, server_address, "QUIC REGISTER host Sharing")
+                expect(host, server_address, f"QUIC REGISTERED {'%s:%s' % host.getsockname()}")
+                send(guest, server_address, "QUIC REGISTER guest Sharing")
+                expect(guest, server_address, f"QUIC REGISTERED {'%s:%s' % guest.getsockname()}")
+                expect(guest, server_address, "QUIC bit-to-byte/1\nhello\nhost\nSharing")
+                send(guest, server_address, "QUIC DISCOVER host")
+                expect(guest, server_address, f"QUIC PEER host {'%s:%s' % host.getsockname()} Sharing")
+                expect(host, server_address, f"QUIC PEER guest {'%s:%s' % guest.getsockname()} Sharing")
+                payload = bytes(range(256)) * 4
+                host.sendto(b"QUIC DATA guest " + payload, server_address)
+                assert guest.recvfrom(4096) == (b"QUIC FROM host " + payload, server_address)
+                outsider.sendto(b"QUIC DATA guest " + payload, server_address)
+                guest.settimeout(0.2)
+                try:
+                    guest.recvfrom(4096)
+                    raise AssertionError("Relay accepted unregistered QUIC traffic")
+                except socket.timeout:
+                    pass
+                # Sharing registrations must not appear in the chat people list.
+                send(alice, server_address, "REGISTER alice Alice")
+                expect(alice, server_address, f"REGISTERED {alice_address}")
+                alice.settimeout(0.2)
+                try:
+                    alice.recvfrom(4096)
+                    raise AssertionError("Sharing endpoints appeared as chat members")
+                except socket.timeout:
+                    pass
+            print("PASS: chat, discovery, receipts, source checks, goodbye, isolated binary QUIC relay")
     finally:
         server.terminate()
         server.wait(timeout=5)

@@ -1,4 +1,4 @@
-// Registration, discovery, and opaque forwarding.
+// Registration, discovery, and opaque forwarding, shared by chat and QUIC.
 use std::{
     net::SocketAddr,
     time::{Duration, Instant},
@@ -164,7 +164,6 @@ impl Server {
                         address: recipient.address,
                         text: format!("FROM {} {}", sender_id, payload),
                     });
-                    println!("Relaying {} -> {}", sender_id, recipient_id);
                     return replies;
                 }
             }
@@ -221,5 +220,73 @@ impl Server {
             index += 1;
         }
         return None;
+    }
+}
+
+// Keep QUIC binary: Base64 would push a 1200-byte packet over the network MTU.
+#[derive(Default)]
+pub(super) struct Relay {
+    chat: Server,
+    sharing: Server,
+}
+
+impl Relay {
+    pub fn handle(
+        &mut self,
+        packet: &[u8],
+        source: SocketAddr,
+        now: Instant,
+    ) -> Vec<(SocketAddr, Vec<u8>)> {
+        if let Some(body) = packet.strip_prefix(b"QUIC DATA ") {
+            self.sharing
+                .members
+                .retain(|member| now.duration_since(member.last_seen) < REGISTRATION_LIFETIME);
+            let Some(split) = body.iter().position(|byte| *byte == b' ') else {
+                return Vec::new();
+            };
+            let Ok(id) = std::str::from_utf8(&body[..split]) else {
+                return Vec::new();
+            };
+            let data = &body[split + 1..];
+            if data.is_empty() || data.len() > 1200 {
+                return Vec::new();
+            }
+            let Some(sender) = self
+                .sharing
+                .members
+                .iter()
+                .find(|member| member.address == source)
+            else {
+                return Vec::new();
+            };
+            let Some(recipient) = self
+                .sharing
+                .members
+                .iter()
+                .find(|member| member.id == id && member.address != source)
+            else {
+                return Vec::new();
+            };
+            let mut forwarded = format!("QUIC FROM {} ", sender.id).into_bytes();
+            forwarded.extend_from_slice(data);
+            return vec![(recipient.address, forwarded)];
+        }
+        let Ok(text) = std::str::from_utf8(packet) else {
+            return Vec::new();
+        };
+        let (service, prefix, text) = match text.strip_prefix("QUIC ") {
+            Some(text) => (&mut self.sharing, "QUIC ", text),
+            None => (&mut self.chat, "", text),
+        };
+        service
+            .handle(text, source, now)
+            .into_iter()
+            .map(|reply| {
+                (
+                    reply.address,
+                    format!("{prefix}{}", reply.text).into_bytes(),
+                )
+            })
+            .collect()
     }
 }
