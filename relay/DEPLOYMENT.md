@@ -45,3 +45,20 @@ the TUI. Users now run only `cargo run`; no manual server address or peer ID is
 needed. The source cleanup retains the TUI wire protocol and removes the unused
 standalone UDP client and introduction commands. It does not require changing the
 deployed server; no new deployment was made as part of this refactor.
+
+## QUIC application sharing update
+
+Deployed on 2026-10-07 at 20:55 UTC. The custom relay now supports isolated
+`QUIC` registrations, discovery, and binary packet forwarding on UDP 47002.
+Quinn runs on the clients; the relay forwards encrypted QUIC packets.
+
+The deployed binary SHA-256 is
+`a62a01af2dd4fc6dc947c4cb05ab905725e9b9bb58e03a7b193291fd20c8bd95`.
+The previous binary is preserved at
+`/opt/club-relay/udp-server.before-quic-20261007`.
+
+Public checks verified registrations, two-way introductions, binary forwarding,
+and existing chat registration. A full app test through the public relay verified
+an encrypted invitation, explicit acceptance, a correct 128 KB HTTP response over
+QUIC relay fallback, and local port release after `/stop`. Direct QUIC worked in
+local checks; direct connections across separate internet NATs still need testing.
