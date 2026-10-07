@@ -82,6 +82,7 @@ pub struct OutgoingMessage {
 }
 
 pub struct App {
+    pub sharing: super::sharing::Sharing,
     pub network_status: String,
     pub outbox: Vec<OutgoingMessage>,
     pub running: bool,
@@ -97,6 +98,7 @@ pub struct App {
 impl App {
     pub fn new() -> App {
         return App {
+            sharing: super::sharing::Sharing::default(),
             network_status: String::from("Connecting to relay"),
             outbox: Vec::new(),
             running: true,
@@ -130,7 +132,7 @@ impl App {
     }
 
     pub fn message_mut(&mut self, outgoing: &OutgoingMessage) -> Option<&mut Message> {
-        if outgoing.kind == "GLOBAL" {
+        if outgoing.kind.starts_with("GLOBAL") {
             return self.global_messages.get_mut(outgoing.message_index);
         }
         return self
@@ -143,7 +145,7 @@ impl App {
         let Some(message) = self.message_mut(outgoing) else {
             return;
         };
-        if outgoing.kind == "GLOBAL" {
+        if outgoing.kind.starts_with("GLOBAL") {
             message.pending_receipts = message.pending_receipts.saturating_sub(1);
             if delivery == Delivery::Delivered
                 && (message.pending_receipts > 0 || message.delivery == Some(Delivery::Unconfirmed))
@@ -156,6 +158,12 @@ impl App {
 
     pub fn remove_person(&mut self, index: usize) {
         let person = self.people.remove(index);
+        self.sharing.offers.retain(|(id, _)| id != &person.id);
+        if self.sharing.peer.as_deref() == Some(&person.id)
+            || matches!(&self.sharing.command, Some(super::sharing::Command::Host { person_id: Some(id), .. } | super::sharing::Command::Join { person_id: id, .. }) if id == &person.id)
+        {
+            self.sharing.command = Some(super::sharing::Command::Stop);
+        }
         for outgoing in std::mem::take(&mut self.outbox) {
             if outgoing.person_id == person.id {
                 self.finish_delivery(&outgoing, Delivery::Unconfirmed);

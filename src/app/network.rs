@@ -11,6 +11,7 @@ use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
+use crate::app::sharing::Offer;
 use crate::app::state::{
     App, Delivery, MAX_MESSAGE_BYTES, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message,
     OutgoingMessage,
@@ -151,6 +152,45 @@ impl Network {
             }
             if let Some((address, token)) = probe {
                 self.send_direct_control(&person.id, address, &token, "PUNCH");
+            }
+        }
+        if let Some((person_id, port, body)) = app.sharing.update() {
+            let global = person_id.is_none();
+            let recipients: Vec<_> = app
+                .people
+                .iter()
+                .filter(|person| person_id.as_ref().is_none_or(|id| id == &person.id))
+                .map(|person| person.id.clone())
+                .collect();
+            if body.len() > MAX_MESSAGE_BYTES
+                || recipients.is_empty()
+                || app.outbox.len() + recipients.len() > MAX_PENDING_MESSAGES
+            {
+                app.sharing.status = "share invitation too large or outbox full".into();
+                app.sharing.command = Some(crate::app::sharing::Command::Stop);
+            } else {
+                let messages = if global {
+                    &mut app.global_messages
+                } else {
+                    &mut app
+                        .find_person(person_id.as_ref().unwrap())
+                        .unwrap()
+                        .messages
+                };
+                let message_index = messages.len();
+                let mut message = Message::sent(&format!("Sharing localhost:{port} · /stop"));
+                if global {
+                    message.pending_receipts = recipients.len();
+                }
+                messages.push(message);
+                for person_id in recipients {
+                    app.outbox.push(OutgoingMessage {
+                        person_id,
+                        text: body.clone(),
+                        message_index,
+                        kind: if global { "GLOBAL_SHARE" } else { "SHARE" },
+                    });
+                }
             }
         }
         self.queue_outgoing_messages(app, now);
@@ -301,14 +341,22 @@ impl Network {
                     app.finish_delivery(&confirmed.outgoing, Delivery::Delivered);
                 }
             }
-            ("CHAT" | "GLOBAL", _, _) => {
+            ("CHAT" | "GLOBAL" | "SHARE" | "GLOBAL_SHARE", _, _) => {
                 if body.is_empty()
                     || body.len() > MAX_MESSAGE_BYTES
-                    || body.chars().count() > MAX_MESSAGE_CHARACTERS
+                    || (!kind.ends_with("SHARE") && body.chars().count() > MAX_MESSAGE_CHARACTERS)
                     || body.chars().any(char::is_control)
                 {
                     return;
                 }
+                let offer = if kind.ends_with("SHARE") {
+                    let Some(offer) = Offer::parse(body) else {
+                        return;
+                    };
+                    Some(offer)
+                } else {
+                    None
+                };
                 // Only accept messages from people in our list.
                 let person = match app.find_person(sender_id) {
                     Some(person) => person,
@@ -323,12 +371,23 @@ impl Network {
                     if self.received.len() >= MAX_REMEMBERED_MESSAGES {
                         return;
                     }
-                    let mut message = Message::received(body);
-                    if kind == "GLOBAL" {
+                    let mut message = match &offer {
+                        Some(offer) => Message::received(&format!(
+                            "localhost:{} offered · /accept [port]",
+                            offer.port
+                        )),
+                        None => Message::received(body),
+                    };
+                    if kind.starts_with("GLOBAL") {
                         message.author = Some(person.name.clone());
                         app.global_messages.push(message);
                     } else {
                         person.messages.push(message);
+                    }
+                    if let Some(mut offer) = offer {
+                        offer.global = kind == "GLOBAL_SHARE";
+                        app.sharing.offers.retain(|(id, _)| id != sender_id);
+                        app.sharing.offers.push((sender_id.into(), offer));
                     }
                     self.received.push(ReceivedMessage {
                         sender_id: String::from(sender_id),
@@ -396,7 +455,7 @@ impl Network {
                     && let Some(message) = app.message_mut(&pending.outgoing)
                 {
                     message.route = Some(
-                        if pending.outgoing.kind == "GLOBAL"
+                        if pending.outgoing.kind.starts_with("GLOBAL")
                             && message.route.is_some_and(|old| old != route)
                         {
                             "D/R"
@@ -506,7 +565,7 @@ impl Network {
 }
 
 // A fresh ID for this run, written as 24 hexadecimal characters.
-fn random_id() -> io::Result<String> {
+pub(super) fn random_id() -> io::Result<String> {
     let mut bytes = [0_u8; RANDOM_ID_BYTES];
     match getrandom::fill(&mut bytes) {
         Ok(()) => {}

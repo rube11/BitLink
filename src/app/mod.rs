@@ -2,6 +2,7 @@
 mod crypto;
 pub mod network;
 pub mod presence;
+pub mod sharing;
 pub mod state;
 
 use std::io;
