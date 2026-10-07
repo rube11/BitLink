@@ -327,3 +327,64 @@ fn largest_allowed_unicode_message_fits_the_existing_relay() {
             .is_err()
     );
 }
+
+#[test]
+fn sharing_invitations_require_encryption_and_acceptance_and_are_not_duplicated() {
+    use crate::{app::sharing::Command, tests::press};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use crossterm::event::KeyCode;
+    let certificate = rcgen::generate_simple_self_signed(vec!["club-share".into()]).unwrap();
+    let body = format!(
+        "3000 {} 0123456789abcdef01234567 {}",
+        STANDARD.encode([7; 32]),
+        STANDARD.encode(certificate.cert.der())
+    );
+    for (kind, chat) in [("SHARE", 1), ("GLOBAL_SHARE", 0)] {
+        let (_server, mut network) = test_network();
+        let mut app = App::new();
+        let now = Instant::now();
+        network.handle_packet(&mut app, "bit-to-byte/1\nhello\nbob\nBob", None, now);
+        let payload = format!("share-1 {kind} {body}");
+        network.handle_packet(&mut app, &format!("FROM bob {payload}"), None, now);
+        assert!(app.sharing.offers.is_empty());
+        for _ in 0..2 {
+            network.handle_packet(&mut app, &incoming(&network, "bob", &payload), None, now);
+        }
+        assert_eq!(app.sharing.offers.len(), 1);
+        assert_eq!(app.people[0].messages.len(), chat);
+        assert_eq!(app.global_messages.len(), 1 - chat);
+        assert!(app.sharing.command.is_none());
+        let recipient = if chat == 0 {
+            network.handle_packet(&mut app, "bit-to-byte/1\nhello\ncarol\nCarol", None, now);
+            network.handle_packet(&mut app, &incoming(&network, "carol", &payload), None, now);
+            // Retrying Bob's older offer must not replace Carol's latest offer.
+            network.handle_packet(&mut app, &incoming(&network, "bob", &payload), None, now);
+            assert_eq!(app.global_messages[1].author.as_deref(), Some("Carol"));
+            "carol"
+        } else {
+            "bob"
+        };
+        app.selected_chat = chat;
+        app.typing = true;
+        *app.draft_mut().unwrap() = "/accept 0".into();
+        press(&mut app, KeyCode::Enter);
+        assert!(app.sharing.command.is_none());
+        *app.draft_mut().unwrap() = "/accept".into();
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.sharing.command,
+            Some(Command::Join { person_id, port: 7331, .. }) if person_id == recipient));
+        app.typing = true;
+        *app.draft_mut().unwrap() = "/share 3000".into();
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.sharing.command,
+            Some(Command::Host { person_id, port: 3000 }) if person_id.is_none() == (chat == 0)));
+        while !app.people.is_empty() {
+            app.remove_person(0);
+        }
+        assert!(app.sharing.offers.is_empty());
+        assert_eq!(
+            matches!(app.sharing.command, Some(Command::Stop)),
+            chat != 0
+        );
+    }
+}

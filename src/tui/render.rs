@@ -55,7 +55,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     };
     // Connection failures remain visible without a permanent status banner.
     let status = match app.network_status.as_str() {
-        "Relay connected" => "",
+        "Relay connected" => app.sharing.status.as_str(),
         "Connecting to relay" => "connecting…",
         "Relay unavailable · retrying" => "relay unavailable · retrying",
         error => error,

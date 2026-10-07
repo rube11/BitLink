@@ -2,6 +2,7 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::app::sharing::Command;
 use crate::app::state::{
     App, MAX_MESSAGE_BYTES, MAX_MESSAGE_CHARACTERS, MAX_PENDING_MESSAGES, Message, OutgoingMessage,
     View,
@@ -91,6 +92,46 @@ fn handle_typing(app: &mut App, key: KeyCode) {
         }
         KeyCode::Enter => {
             let message = draft.trim().to_string();
+            if message.starts_with('/') {
+                let words: Vec<_> = message.split_whitespace().collect();
+                let person_id = app
+                    .selected_chat
+                    .checked_sub(1)
+                    .and_then(|index| app.people.get(index))
+                    .map(|person| person.id.clone());
+                let port = words
+                    .get(1)
+                    .map_or(Some(7331), |port| port.parse::<u16>().ok())
+                    .filter(|port| *port != 0);
+                app.sharing.command = match (words.as_slice(), port) {
+                    (["/stop"], _) => Some(Command::Stop),
+                    (["/share", _], Some(port)) if !app.people.is_empty() => {
+                        Some(Command::Host { person_id, port })
+                    }
+                    (["/accept"] | ["/accept", _], Some(port)) => app
+                        .sharing
+                        .offers
+                        .iter()
+                        .rev()
+                        .find(|(id, offer)| {
+                            person_id.as_ref().map_or(offer.global, |peer| peer == id)
+                        })
+                        .cloned()
+                        .map(|(person_id, offer)| Command::Join {
+                            person_id,
+                            offer,
+                            port,
+                        }),
+                    _ => None,
+                };
+                if app.sharing.command.is_some() {
+                    app.draft_mut().unwrap().clear();
+                    app.typing = false;
+                } else {
+                    app.sharing.status = "/share PORT · /accept [PORT] · /stop".into();
+                }
+                return;
+            }
             let recipients: Vec<String> = if app.selected_chat == 0 {
                 app.people.iter().map(|person| person.id.clone()).collect()
             } else {

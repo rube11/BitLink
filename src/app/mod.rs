@@ -26,7 +26,14 @@ pub fn run() -> io::Result<()> {
         };
         match argument.as_str() {
             "--help" => {
-                println!("Usage: bit-to-byte [--name NAME]");
+                println!("Usage: bit-to-byte [--name NAME] [--share-relay ADDRESS]");
+                println!("Chat commands: /share PORT · /accept [LOCAL_PORT] · /stop");
+                println!(
+                    "Global /share invites everyone online; /accept joins the latest global offer."
+                );
+                println!(
+                    "Sharing uses QUIC and our club relay, with a direct connection attempt first."
+                );
                 return Ok(());
             }
             "--name" => {
@@ -39,6 +46,12 @@ pub fn run() -> io::Result<()> {
                         ));
                     }
                 };
+            }
+            "--share-relay" => {
+                let url = arguments
+                    .next()
+                    .ok_or_else(|| io::Error::other("Missing sharing relay address."))?;
+                app.sharing.relay = Some(url.parse().map_err(io::Error::other)?);
             }
             _ => {
                 return Err(io::Error::new(
