@@ -347,7 +347,7 @@ impl Network {
         }
         // Send a receipt even for a repeat, because the first one may have been lost.
         if let Ok(packet) = self.encrypted_payload(sender_id, &format!("{} RECEIPT", token)) {
-            self.send_to_peer(sender_id, &packet, now, prefer_direct);
+            let _route = self.send_to_peer(sender_id, &packet, now, prefer_direct);
         }
     }
 
@@ -390,12 +390,17 @@ impl Network {
             if now >= self.pending[index].next_send {
                 // Retry the exact encrypted packet, including its original nonce.
                 let pending = &self.pending[index];
-                self.send_to_peer(
+                let route = self.send_to_peer(
                     &pending.outgoing.person_id,
                     &pending.encrypted_payload,
                     now,
                     waited < DIRECT_RETRY_FOR,
                 );
+                if let Some(person) = app.find_person(&pending.outgoing.person_id)
+                    && let Some(message) = person.messages.get_mut(pending.outgoing.message_index)
+                {
+                    message.route = route.or(message.route);
+                }
                 self.pending[index].next_send = now + RESEND_EVERY;
             }
             index += 1;
@@ -460,7 +465,13 @@ impl Network {
         }
     }
 
-    fn send_to_peer(&self, recipient: &str, packet: &str, now: Instant, prefer_direct: bool) {
+    fn send_to_peer(
+        &self,
+        recipient: &str,
+        packet: &str,
+        now: Instant,
+        prefer_direct: bool,
+    ) -> Option<&'static str> {
         if prefer_direct && let Some(address) = self.direct_address(recipient, now) {
             let direct_packet = format!("FROM {} {}", self.id, packet);
             if self
@@ -468,18 +479,20 @@ impl Network {
                 .send_to(direct_packet.as_bytes(), address)
                 .is_ok()
             {
-                return;
+                return Some("direct UDP");
             }
         }
         // Unconfirmed direct messages switch to the relay after two seconds,
         // even if probes still succeed. The ciphertext and delivery token stay
         // unchanged, so switching paths does not duplicate displayed messages.
-        self.send(&format!("RELAY {} {}", recipient, packet));
+        return self
+            .send(&format!("RELAY {} {}", recipient, packet))
+            .then_some("relay");
     }
 
-    fn send(&self, packet: &str) {
+    fn send(&self, packet: &str) -> bool {
         // A failed send is not fatal: registration and messages are repeated later.
-        let _result = self.socket.send_to(packet.as_bytes(), self.server);
+        return self.socket.send_to(packet.as_bytes(), self.server).is_ok();
     }
 }
 

@@ -35,10 +35,14 @@ fn delivery_labels_are_drawn_without_treating_message_text_as_metadata() {
 
     app.people[0].messages.push(Message::sent("hello"));
     assert!(draw_screen(&app, 80, 24).contains("[sending] hello"));
+    app.people[0].messages[1].route = Some("direct UDP");
+    assert!(draw_screen(&app, 80, 24).contains("[sending · direct UDP] hello"));
     app.people[0].messages[1].delivery = Some(Delivery::Delivered);
-    assert!(draw_screen(&app, 80, 24).contains("[delivered] hello"));
+    assert!(draw_screen(&app, 80, 24).contains("[delivered · direct UDP] hello"));
+    app.people[0].messages[1].route = Some("relay");
+    assert!(draw_screen(&app, 80, 24).contains("[delivered · relay] hello"));
     app.people[0].messages[1].delivery = Some(Delivery::Unconfirmed);
-    assert!(draw_screen(&app, 80, 24).contains("[unconfirmed] hello"));
+    assert!(draw_screen(&app, 80, 24).contains("[unconfirmed · relay] hello"));
 }
 
 #[test]

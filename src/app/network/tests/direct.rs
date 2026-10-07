@@ -78,6 +78,7 @@ fn introduced_clients_exchange_direct_chat_then_fall_back_without_duplicates() {
     assert_no_packet(&server);
 
     queue_chat(&mut alice, &mut alice_app, &bob.id, "direct hello 界", now);
+    assert_eq!(alice_app.people[0].messages[0].route, Some("direct UDP"));
     bob.receive_packets(&mut bob_app, now);
     alice.receive_packets(&mut alice_app, now);
     assert_eq!(
@@ -93,6 +94,7 @@ fn introduced_clients_exchange_direct_chat_then_fall_back_without_duplicates() {
 
     // Lose a receipt while probes still consider both routes healthy.
     queue_chat(&mut alice, &mut alice_app, &bob.id, "lost receipt", now);
+    assert_eq!(alice_app.people[0].messages[1].route, Some("direct UDP"));
     let ciphertext = alice.pending[0].encrypted_payload.clone();
     bob.receive_packets(&mut bob_app, now);
     let (lost_receipt, source) = read_packet(&alice.socket);
@@ -101,6 +103,7 @@ fn introduced_clients_exchange_direct_chat_then_fall_back_without_duplicates() {
 
     let fallback_time = now + DIRECT_RETRY_FOR;
     alice.resend_pending_messages(&mut alice_app, fallback_time);
+    assert_eq!(alice_app.people[0].messages[1].route, Some("relay"));
     let (relayed, source) = read_packet(&server);
     assert_eq!(source, alice_address);
     assert_eq!(relayed, format!("RELAY {} {}", bob.id, ciphertext));
@@ -133,6 +136,7 @@ fn introduced_clients_exchange_direct_chat_then_fall_back_without_duplicates() {
     // Without fresh probe replies, even a new message starts on the relay.
     let stale = now + Duration::from_secs(6);
     queue_chat(&mut alice, &mut alice_app, &bob.id, "stale route", stale);
+    assert_eq!(alice_app.people[0].messages[2].route, Some("relay"));
     assert!(
         read_packet(&server)
             .0
@@ -263,6 +267,7 @@ fn failed_hole_punching_keeps_encrypted_relay_delivery_available() {
     assert_eq!(read_packet(&server).0, "DISCOVER bob");
     assert!(read_packet(&peer).0.starts_with("FROM "));
     queue_chat(&mut network, &mut app, "bob", "relay hello", now);
+    assert_eq!(app.people[0].messages[0].route, Some("relay"));
     assert!(read_packet(&server).0.starts_with("RELAY bob ENC1 "));
     let receipt = incoming(
         &network,

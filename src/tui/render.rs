@@ -224,7 +224,10 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &App) {
                     Delivery::Delivered => "delivered",
                     Delivery::Unconfirmed => "unconfirmed",
                 };
-                format!("[{}] {}", label, message.text)
+                match message.route {
+                    Some(route) => format!("[{} · {}] {}", label, route, message.text),
+                    None => format!("[{}] {}", label, message.text),
+                }
             }
             None => message.text.clone(),
         };

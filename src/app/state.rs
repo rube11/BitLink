@@ -32,6 +32,8 @@ pub struct Message {
     pub text: String,
     // Only our own messages have a delivery status.
     pub delivery: Option<Delivery>,
+    // Last successful send attempt; a receipt may confirm an earlier attempt.
+    pub route: Option<&'static str>,
 }
 
 impl Message {
@@ -40,6 +42,7 @@ impl Message {
             from_me: false,
             text: String::from(text),
             delivery: None,
+            route: None,
         };
     }
 
@@ -48,6 +51,7 @@ impl Message {
             from_me: true,
             text: String::from(text),
             delivery: Some(Delivery::Sending),
+            route: None,
         };
     }
 }
